@@ -13,7 +13,27 @@ var __extends = (this && this.__extends) || (function () {
     };
 })();
 var domBindings = new WeakMap();
-export var render = function (result, node) {
+// export const render: RenderFn = (result, node, after?) => {
+//     let instance: TemplateInstance;
+//     if (domBindings.has(node)) {
+//         instance = domBindings.get(node);
+//         instance.setValues(result.values);
+//     } else {
+//         instance = new TemplateInstance(result);
+//         domBindings.set(node, instance);
+//         instance.setValues(result.values);
+//         if (after) {
+//             after.parentNode.insertBefore(
+//                 instance.toElement(),
+//                 after.nextSibling,
+//             );
+//         } else {
+//             node.appendChild(instance.toElement());
+//         }
+//     }
+//     return instance;
+// };
+export var render = function (result, node, after) {
     var instance;
     if (domBindings.has(node)) {
         instance = domBindings.get(node);
@@ -23,7 +43,12 @@ export var render = function (result, node) {
         instance = new TemplateInstance(result);
         domBindings.set(node, instance);
         instance.setValues(result.values);
-        node.appendChild(instance.toElement());
+        if (after) {
+            after.parentNode.insertBefore(instance.toElement(), after.nextSibling);
+        }
+        else {
+            node.appendChild(instance.toElement());
+        }
     }
     return instance;
 };
@@ -65,10 +90,8 @@ var TextAttrBinding = /** @class */ (function (_super) {
     function TextAttrBinding() {
         return _super !== null && _super.apply(this, arguments) || this;
     }
-    TextAttrBinding.prototype.setValue = function (value) {
-    };
-    TextAttrBinding.prototype.commit = function () {
-    };
+    TextAttrBinding.prototype.setValue = function (value) { };
+    TextAttrBinding.prototype.commit = function () { };
     return TextAttrBinding;
 }(AttrBinding));
 var EventHandlerBinding = /** @class */ (function (_super) {
@@ -76,10 +99,8 @@ var EventHandlerBinding = /** @class */ (function (_super) {
     function EventHandlerBinding() {
         return _super !== null && _super.apply(this, arguments) || this;
     }
-    EventHandlerBinding.prototype.setValue = function (value) {
-    };
-    EventHandlerBinding.prototype.commit = function () {
-    };
+    EventHandlerBinding.prototype.setValue = function (value) { };
+    EventHandlerBinding.prototype.commit = function () { };
     return EventHandlerBinding;
 }(AttrBinding));
 var bindToNode = function (node, bindings) {
@@ -136,38 +157,58 @@ var bindToNode = function (node, bindings) {
         // node mark
         case 8:
             var match = node.nodeValue.match(/\$\_(\d)\_\$/);
-            if (match) {
-                var index_1 = parseInt(match[1], 10);
-                bindings[index_1] = {
-                    prevType: null,
-                    prevRef: null,
-                    originalValue: node.nodeValue,
-                    setValue: function (value) {
-                        /* debug */ console.log('*** app:129 value', value);
-                        var type = value.constructor.name;
-                        switch (type) {
-                            case 'String':
-                                var text = this.originalValue.replace("$_" + index_1 + "_$", value);
-                                if (this.prevType === 'String') {
-                                    this.prevRef.textContent = text;
-                                }
-                                else {
-                                    var textNode = document.createTextNode(text);
-                                    node.parentNode.insertBefore(textNode, node);
-                                    this.prevType = 'String';
-                                    this.prevRef = textNode;
-                                }
-                                break;
-                            case 'TemplateResult':
-                                /* debug */ console.log('*** app value', value);
-                                this.prevType = 'TemplateResult';
-                                render(value, node.parentElement);
-                                break;
-                        }
-                    },
-                    commit: function () { }
-                };
-            }
+            if (!match || match.length === 0)
+                return;
+            var index_1 = parseInt(match[1], 10);
+            bindings[index_1] = {
+                prevType: null,
+                prevRef: null,
+                originalValue: node.nodeValue,
+                insertAfter: function (newNode, referenceNode) {
+                    referenceNode.parentNode.insertBefore(newNode, referenceNode.nextSibling);
+                },
+                setValue: function (value) {
+                    mountOrUpdateNodeValue(value, node);
+                    // const type = value.constructor.name;
+                    // switch (type) {
+                    //     case 'String':
+                    //         this._setStringValue(value);
+                    //         break;
+                    //     case 'TemplateResult':
+                    //         this._setTemplateResultValue(value);
+                    //         break;
+                    //     case 'Array':
+                    //         this._setArrayValue(value);
+                    //         break;
+                    // }
+                    // this.prevType = type;
+                },
+                _setStringValue: function (value) {
+                    var text = this.originalValue.replace("$_" + index_1 + "_$", value);
+                    if (this.prevType === 'String') {
+                        this.prevRef.textContent = text;
+                    }
+                    else {
+                        var textNode = document.createTextNode(text);
+                        this.insertAfter(textNode, node);
+                        this.prevRef = textNode;
+                    }
+                },
+                _setTemplateResultValue: function (value) {
+                    render(value, node.parentElement);
+                },
+                _setArrayValue: function (value) {
+                    var fragment = new DocumentFragment();
+                    value.forEach(function (item, i) {
+                        var textNode = document.createTextNode(i);
+                        fragment.appendChild(textNode);
+                        /* debug */ console.log('*** app item', item);
+                        render(item, textNode.parentElement, textNode);
+                    });
+                    node.parentElement.appendChild(fragment);
+                },
+                commit: function () { }
+            };
             break;
     }
 };
@@ -175,23 +216,15 @@ var TemplateInstance = /** @class */ (function () {
     function TemplateInstance(result) {
         this.result = result;
         this.element = this.result.template.clone();
-        this.bindings = new Array(this.result.values.length);
+        this.bindings = new Array(this.result.values.length).fill(null);
         this.createBindings();
     }
-    TemplateInstance.prototype.toElement = function () {
-        return this.element;
-    };
     TemplateInstance.prototype.createBindings = function () {
-        var walker = document.createTreeWalker(this.element, 133 /* NodeFilter.SHOW_{ELEMENT|COMMENT|TEXT} */, null, false);
-        var nodeList = [];
-        var counter = 0;
-        this.bindings.fill(null);
+        /* NodeFilter.SHOW_{ELEMENT|COMMENT|TEXT} */
+        var walker = document.createTreeWalker(this.element, 133, null, false);
         while (walker.nextNode()) {
-            nodeList.push(walker.currentNode);
             bindToNode(walker.currentNode, this.bindings);
-            counter = counter + 1;
         }
-        /* debug */ console.log('*** nodeList', nodeList);
     };
     TemplateInstance.prototype.setValues = function (values) {
         this.bindings.forEach(function (binding, i) {
@@ -204,6 +237,9 @@ var TemplateInstance = /** @class */ (function () {
                 binding.commit();
             }
         });
+    };
+    TemplateInstance.prototype.toElement = function () {
+        return this.element;
     };
     return TemplateInstance;
 }());
@@ -258,4 +294,69 @@ export function html(strings) {
 var components = new Map();
 export function define(name, component) {
     components.set(name, component);
+}
+function toArray(value) {
+    return Array.isArray(value) ? value : [value];
+}
+var NodeInstance = /** @class */ (function () {
+    function NodeInstance() {
+    }
+    return NodeInstance;
+}());
+var NodeFragment = /** @class */ (function () {
+    function NodeFragment(value) {
+        this.fragment = new DocumentFragment();
+        this.elementCounts = [];
+        this.isMounted = false;
+        this.children = toArray(value);
+    }
+    NodeFragment.prototype.createTextNode = function (value) {
+        return document.createTextNode(String(value));
+    };
+    NodeFragment.prototype.createTemplateResultNode = function (value) {
+        return new TemplateInstance(value);
+    };
+    NodeFragment.prototype.mount = function (markNode) {
+        var _this = this;
+        var elements = this.children.map(function (value) {
+            var type = value.constructor;
+            switch (type) {
+                case String:
+                    return _this.createTextNode(value);
+                case Number:
+                    return _this.createTextNode(value);
+                case TemplateResult:
+                    var templateResult = value;
+                    var instance = _this.createTemplateResultNode(templateResult);
+                    instance.setValues(templateResult.values);
+                    return instance.toElement();
+                case Boolean:
+                default:
+                    throw new Error("Cant render " + type + " as NodeValue");
+            }
+        });
+        this.elementCounts = elements.map(function (element) {
+            return element instanceof DocumentFragment ? element.childElementCount : 1;
+        });
+        elements.forEach(function (element) { return _this.fragment.appendChild(element); });
+        markNode.parentNode.insertBefore(this.fragment, markNode.nextSibling);
+        this.isMounted = true;
+    };
+    NodeFragment.prototype.update = function (value) {
+        var children = toArray(value);
+        /* debug */ console.log('update', value);
+        /* debug */ console.log('this.elementCounts', this.elementCounts);
+    };
+    return NodeFragment;
+}());
+var connectedFragments = new WeakMap();
+function mountOrUpdateNodeValue(nodeValue, markNode) {
+    /* debug */ console.log('nodeValue', nodeValue, markNode);
+    var nodeFragment = connectedFragments.get(markNode) || new NodeFragment(nodeValue);
+    if (nodeFragment.isMounted) {
+        nodeFragment.update(nodeValue);
+    }
+    else {
+        nodeFragment.mount(markNode);
+    }
 }
