@@ -26,7 +26,7 @@ describe('html', () => {
 });
 
 describe('render', () => {
-    describe('string | number | string[] | number[]', () => {
+    describe('primitives', () => {
         let root;
 
         beforeEach(() => {
@@ -34,31 +34,38 @@ describe('render', () => {
         });
 
         it('should render plain string value', () => {
-            const tmpl = title => title;
-
-            render(tmpl('hello'), root);
+            render('hello', root);
             expect(root.textContent).toBe('hello');
         });
 
         it('should render array of plain string values', () => {
-            const tmpl = title => [title, title];
-
-            render(tmpl('hello'), root);
+            render(['hello', 'hello'], root);
             expect(root.textContent).toBe('hellohello');
         });
 
-        it('should render plain number value', () => {
-            const tmpl = x => x;
-
-            render(tmpl(1), root);
+        it('should render plain number value as strins', () => {
+            render(1, root);
             expect(root.textContent).toBe('1');
         });
 
-        it('should render array of number values', () => {
-            const tmpl = x => [x, x];
+        it('should render array of number values as strins', () => {
+            render([1, 2], root);
+            expect(root.textContent).toBe('12');
+        });
 
-            render(tmpl(1), root);
-            expect(root.textContent).toBe('11');
+        it('should render null as empty string', () => {
+            render(null, root);
+            expect(root.textContent).toBe('');
+        });
+
+        it('should render true as "true"', () => {
+            render(true, root);
+            expect(root.textContent).toBe('true');
+        });
+
+        it('should render false as empty string', () => {
+            render(false, root);
+            expect(root.textContent).toBe('');
         });
     });
 
@@ -312,18 +319,55 @@ describe('update', () => {
                 expect(node1).toBe(node2);
                 expect(node2.textContent).toBe('hello2');
             });
+        });
+    });
 
-            xit('should handle updating different value types', () => {
-                const fn = content =>
-                    html`<div>${content}</div>`;
+    describe('varrying template values', () => {
+        it('should handle updating different value types', () => {
+            render('one', root);
+            expect(root.textContent).toBe('one');
 
-                render(fn('one'), root);
-                expect(root.textContent).toBe('one');
+            render(html`<span>two</span>`, root);
+            expect(root.textContent).toBe('two');
 
-                render(fn(html`<span>two</span>`), root);
-                /* debug */ console.log('root.innerHTML', root.innerHTML);
-                expect(root.textContent).toBe('two');
-            });
+            render('three', root);
+            expect(root.textContent).toBe('three');
+
+            render(html`<span>four</span><span>five</span>`, root);
+            expect(root.textContent).toBe('fourfive');
+
+            render('six', root);
+            expect(root.textContent).toBe('six');
+
+            render(html`${[ html`<span>seven</span>`, html`<span>eight</span>`]}`, root);
+            expect(root.textContent).toBe('seveneight');
+
+            render('nine', root);
+            expect(root.textContent).toBe('nine');
+        });
+
+        it('should handle updating different value types lengths', () => {
+            const fn = items => html`
+                <ul>${items.map(item => html`<li>${item}</li>`)}</ul>
+            `;
+
+            render(fn(['one']), root);
+            const lis1 = root.querySelectorAll('li');
+            expect(lis1[0].textContent).toBe('one');
+
+            render(fn(['one', 'two', 'three']), root);
+            const lis2 = root.querySelectorAll('li');
+            expect(lis2[0].textContent).toBe('one');
+            expect(lis2[1].textContent).toBe('two');
+            expect(lis2[2].textContent).toBe('three');
+            expect(lis1[0]).toBe(lis2[0]);
+
+            render(fn(['one', 'two']), root);
+            const lis3 = root.querySelectorAll('li');
+            expect(lis2[0]).toBe(lis3[0]);
+            expect(lis2[1]).toBe(lis3[1]);
+            expect(lis3[0].textContent).toBe('one');
+            expect(lis3[1].textContent).toBe('two');
         });
     });
 });

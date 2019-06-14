@@ -1,45 +1,55 @@
-namespace Yeeld {
-    export type GeneratorComponent<TProps> = (props: TProps) => RenderIterator;
+export type GeneratorComponent<TProps> = (props: TProps) => RenderIterator;
 
-    export type RenderIterator = Iterator<TemplateResult | null>;
+export type RenderIterator = Iterator<TemplateResult | null>;
 
-    export type EventHandler = (event: Event) => void;
+export type EventHandler = (event: Event) => void;
 
-    export type TemplateAttrValue = string | number | boolean | EventHandler;
+export type TemplateAttrValue = string | number | boolean | EventHandler;
 
-    export type TemplateNodeValue =
-        | string
-        | number
-        | boolean
-        | TemplateResult
-        | RenderIterator
-        | (string | number | boolean | TemplateResult | RenderIterator)[];
+export type TemplateNodeValue =
+    | string
+    | number
+    | boolean
+    | TemplateResult
+    | RenderIterator
+    | (string | number | boolean | TemplateResult | RenderIterator)[];
 
-    export type TemplateNodeValueArray = (
-        | string
-        | number
-        | boolean
-        | TemplateResult
-        | RenderIterator)[];
+export type TemplateNodeValueArray = (
+    | string
+    | number
+    | boolean
+    | TemplateResult
+    | RenderIterator)[];
 
-    export type TemplateValue = TemplateAttrValue | TemplateNodeValue;
+export type TemplateValue = TemplateAttrValue | TemplateNodeValue;
 
-    export type TemplateCache = Map<TemplateStringsArray, Template>;
+export type TemplateCache = Map<TemplateStringsArray, Template>;
 
-    export enum NodeValueType {
-        TEXT,
-        TEMPLATE_RESULT,
-    }
+export enum ValueType {
+    ATTR,
+    NODE,
+}
 
-    export enum AttrValueType {
-        TEXT,
-        FUNCTION,
-    }
+export enum NodeValueType {
+    NULL,
+    TEXT,
+    TEMPLATE_RESULT,
+}
+
+export enum AttrValueType {
+    TEXT,
+    FUNCTION,
 }
 
 /* regex */
 
 const markRegex = /\$\_(\d)\_\$/;
+
+/* registries */
+
+const nodeFragmentRegistry: WeakMap<Comment, NodeFragment> = new WeakMap();
+const renderRefNodeRegistry = new WeakMap<HTMLElement, Comment>();
+const componentRegistry = new Map<string, any>();
 
 /* helper functions */
 
@@ -54,39 +64,88 @@ function escapeHTML(str: string) {
         .replace(/>/g, '&gt;');
 }
 
-function getNodeValueType(value) {
-    const type = value.constructor;
-    switch (type) {
-        case Number:
-        case String:
-            return Yeeld.NodeValueType.TEXT;
+function getNodeValueType(value): NodeValueType {
+    const type = typeof value;
+    if (value === null) return NodeValueType.TEXT;
+    else if (type === 'boolean' || type === 'string' || type === 'number')
+        return NodeValueType.TEXT;
+    else if (value instanceof TemplateResult)
+        return NodeValueType.TEMPLATE_RESULT;
 
-        case TemplateResult:
-            return Yeeld.NodeValueType.TEMPLATE_RESULT;
+    throw new Error(`Cant render type as NodeValue`);
+}
 
-        default:
-            throw new Error(`Cant render ${type} as NodeValue`);
+// abstract class AttrBinding {
+//     private node = this.attr.ownerElement;
+//     private originalName = this.attr.name;
+//     private originalValue = this.attr.value;
+
+//     constructor(private attr: Attr) {}
+// }
+
+// class TextAttrBinding extends AttrBinding {
+//     setValue(value: TemplateAttrValue) {}
+
+//     commit() {}
+// }
+
+// class EventHandlerBinding extends AttrBinding {
+//     setValue(value: TemplateNodeValue) {}
+
+//     commit() {}
+// }
+
+class Template {
+    private template!: HTMLTemplateElement;
+
+    constructor(private strings: TemplateStringsArray) {
+        const template = document.createElement('template');
+        let state: ValueType = ValueType.NODE;
+
+        template.innerHTML = this.strings
+            .map((str, i) => {
+                const tagStart = str.lastIndexOf('<');
+                const tagEnd = str.lastIndexOf('>');
+
+                if (tagStart > tagEnd) state = ValueType.ATTR;
+                else if (tagEnd > tagStart) state = ValueType.NODE;
+
+                const commentStart = state === ValueType.NODE ? '<!--' : '';
+                const commentEnd = state === ValueType.NODE ? '-->' : '';
+
+                return i < this.strings.length - 1
+                    ? `${str}${commentStart}$_${i}_$${commentEnd}`
+                    : str;
+            })
+            .join('');
+
+        this.template = template;
+    }
+
+    clone() {
+        return document.importNode(this.template.content, true);
     }
 }
 
-abstract class AttrBinding {
-    private node = this.attr.ownerElement;
-    private originalName = this.attr.name;
-    private originalValue = this.attr.value;
+export class TemplateResult {
+    static templates = new Map<TemplateStringsArray, Template>();
 
-    constructor(private attr: Attr) {}
-}
+    public template: Template;
 
-class TextAttrBinding extends AttrBinding {
-    setValue(value: Yeeld.TemplateAttrValue) {}
+    constructor(
+        public strings: TemplateStringsArray,
+        public values: TemplateValue[],
+        public key?: any,
+    ) {
+        let template = TemplateResult.templates.get(strings);
 
-    commit() {}
-}
+        if (!template) {
+            template = new Template(strings);
+            TemplateResult.templates.set(strings, template);
+        }
 
-class EventHandlerBinding extends AttrBinding {
-    setValue(value: Yeeld.TemplateNodeValue) {}
-
-    commit() {}
+        this.template = template;
+    }
 }
 
 class TemplateInstance {
@@ -94,38 +153,33 @@ class TemplateInstance {
 
     private bindings = new Array(this.result.values.length).fill(null);
 
-    constructor(private result: TemplateResult) {
+    constructor(public result: TemplateResult) {
         this.createBindings();
     }
 
     private createBindings() {
-        /* NodeFilter.SHOW_{ELEMENT|COMMENT|TEXT} */
         const walker = document.createTreeWalker(
             this.element,
-            133,
+            129, // ELEMENT + COMMENT
             null,
             false,
         );
         while (walker.nextNode()) {
-            switch (walker.currentNode.nodeType) {
-                // ELEMENT
-                case 1:
-                    this.bindAttributes(walker.currentNode as Element);
-                    break;
-
-                // COMMENT
-                case 8:
-                    this.bindNode(walker.currentNode as Comment);
-                    break;
-            }
+            const type = walker.currentNode.nodeType;
+            if (type === 1)
+                this.resolveAttrMarkers(walker.currentNode as Element);
+            else if (type === 8)
+                this.resolveNodeMarkers(walker.currentNode as Comment);
         }
     }
 
-    private bindAttributes(node: Element) {
-        Array.prototype.forEach.call(node.attributes, attr => this.bindAttribute(attr))
+    private resolveAttrMarkers(node: Element) {
+        Array.prototype.forEach.call(node.attributes, attr =>
+            this.resolveAttr(attr),
+        );
     }
 
-    private bindAttribute(attr: Attr) {
+    private resolveAttr(attr: Attr) {
         const matches = attr.value.match(/\$\_(\d)\_\$/g);
         if (!matches) return;
 
@@ -179,20 +233,20 @@ class TemplateInstance {
         });
     }
 
-    private bindNode(node: Comment) {
+    private resolveNodeMarkers(node: Comment) {
         const match = node.nodeValue.match(markRegex);
         if (!match || match.length === 0) return;
 
         const index = parseInt(match[1], 10);
         this.bindings[index] = {
             setValue(value) {
-                mountOrUpdateNodeValue(value, node);
+                mountNodeValue(value, node);
             },
             commit() {},
         };
     }
 
-    setValues(values: Yeeld.TemplateValue[]) {
+    setValues(values: TemplateValue[]) {
         this.bindings.forEach((binding, i) => binding.setValue(values[i]));
         this.bindings.forEach((binding, i) => binding.commit());
     }
@@ -202,80 +256,98 @@ class TemplateInstance {
     }
 }
 
-export class TemplateResult {
-    constructor(
-        public template: Template,
-        public values: Yeeld.TemplateValue[],
-    ) {}
+interface NodeBinding {
+    mountedNodeRefs: Node[];
+    value: TemplateNodeValue;
+    createNode(): void;
+    getKey(): {};
+    setValue(value: TemplateNodeValue): void;
+    isSame(value): boolean;
+    getNode(): Node;
+    // insertBefore(markNode: Element | Comment): void;
+    // replace(binding: NodeBinding): void;
 }
 
-class Template {
-    private template!: HTMLTemplateElement;
+class TemplateResultNodeBinding implements NodeBinding {
+    private element: DocumentFragment;
 
-    constructor(private strings: TemplateStringsArray) {
-        const template = document.createElement('template');
-        let state: 'ATTR' | 'NODE' = 'NODE';
-        template.innerHTML = this.strings
-            .map((str, i) => {
-                const tagStart = str.lastIndexOf('<');
-                const tagEnd = str.lastIndexOf('>');
-                if (tagStart > tagEnd) state = 'ATTR';
-                else if (tagEnd > tagStart) state = 'NODE';
-                const [commentStart, commentEnd] =
-                    state === 'NODE' ? ['<!--', '-->'] : ['', ''];
-                return i < this.strings.length - 1
-                    ? `${str}${commentStart}$_${i}_$${commentEnd}`
-                    : str;
-            })
-            .join('');
-        this.template = template;
-    }
+    public mountedNodeRefs: Node[];
 
-    clone() {
-        return document.importNode(this.template.content, true);
-    }
-}
+    private instance: TemplateInstance | null;
 
-class NodeBinding {
-    private element: Node;
-
-    private instance: TemplateInstance;
-
-    public type: Yeeld.NodeValueType = getNodeValueType(this.value);
-
-    constructor(public value: Yeeld.TemplateNodeValue) {
+    constructor(public value: TemplateResult, private index: number) {
         this.createNode();
     }
 
     createNode() {
-        switch (this.type) {
-            case Yeeld.NodeValueType.TEXT:
-                this.element = document.createTextNode(
-                    escapeHTML(String(this.value)),
-                );
-                break;
+        const templateResult = this.value as TemplateResult;
+        this.instance = new TemplateInstance(templateResult);
+        this.instance.setValues(templateResult.values);
+        this.element = this.instance.toElement();
+        this.mountedNodeRefs = [].map.call(
+            this.element.children,
+            child => child,
+        );
+    }
 
-            case Yeeld.NodeValueType.TEMPLATE_RESULT:
-                const templateResult = this.value as TemplateResult;
-                this.instance = new TemplateInstance(templateResult);
-                this.instance.setValues(templateResult.values);
-                this.element = this.instance.toElement();
-                break;
-        }
+    getKey() {
+        return this.value.key || this.index;
     }
 
     setValue(value) {
+        this.instance.setValues(value.values);
         this.value = value;
+    }
 
-        switch (this.type) {
-            case Yeeld.NodeValueType.TEXT:
-                this.element.textContent = escapeHTML(String(value));
-                break;
+    isSame(value) {
+        const type = getNodeValueType(value);
 
-            case Yeeld.NodeValueType.TEMPLATE_RESULT:
-                this.instance.setValues(value.values);
-                break;
-        }
+        if (type !== NodeValueType.TEMPLATE_RESULT) return false;
+
+        if (this.instance.result.template !== value.template) return false;
+
+        return true;
+    }
+
+    getNode(): DocumentFragment {
+        return this.element;
+    }
+}
+
+class StringNodeBinding {
+    private element: Text;
+
+    public mountedNodeRefs: Node[];
+
+    constructor(public value: TemplateNodeValue, private index: number) {
+        this.createNode();
+    }
+
+    createNode() {
+        const value =
+            this.value === null || this.value === false
+                ? ''
+                : escapeHTML(String(this.value));
+        this.element = document.createTextNode(value);
+        this.mountedNodeRefs = [this.element];
+    }
+
+    getKey() {
+        return this.index;
+    }
+
+    setValue(value) {
+        if (value === this.value) return;
+        this.element.textContent = escapeHTML(String(value));
+        this.value = value;
+    }
+
+    isSame(value) {
+        const type = getNodeValueType(value);
+
+        if (type !== NodeValueType.TEXT) return false;
+
+        return true;
     }
 
     getNode(): Node {
@@ -289,99 +361,102 @@ class NodeBinding {
  */
 
 class NodeFragment {
-    private children: Yeeld.TemplateNodeValueArray;
+    private values: TemplateNodeValueArray = [];
 
-    private bindings: NodeBinding[];
+    private bindings: NodeBinding[] = [];
 
-    private elementCounts = [];
+    reconcile(refNode: Comment, value: TemplateNodeValue) {
+        const values = toArray(value);
+        const curr = this.bindings;
+        const next = [];
+        const fragment = document.createDocumentFragment();
 
-    public isMounted = false;
+        // Update existing bindings
+        values.slice(0, curr.length).forEach((value, index) => {
+            const binding = curr[index];
 
-    constructor(value: Yeeld.TemplateNodeValue) {
-        this.children = toArray(value);
-    }
-
-    mount(markNode: Node) {
-        this.bindings = this.children.map(
-            value => new NodeBinding(value),
-        );
-
-        this.elementCounts = this.bindings.map(element => {
-            return element instanceof DocumentFragment
-                ? element.childElementCount
-                : 1;
-        });
-        this.bindings.forEach(binding => {
-            markNode.parentNode.insertBefore(binding.getNode(), markNode);
-        });
-        this.isMounted = true;
-    }
-
-    update(value: Yeeld.TemplateNodeValue) {
-        const children = toArray(value);
-
-        children.forEach((value, index) => {
-            const binding = this.bindings[index];
-            const type = getNodeValueType(value);
-
-            if (binding.type === type) {
+            if (binding.isSame(value)) {
                 binding.setValue(value);
+                next.push(binding);
+            } else {
+                const newBinding = createNodeBinding(value, index);
+                const markNode = binding.mountedNodeRefs[0];
+                const parentNode = markNode.parentNode;
+                parentNode.insertBefore(newBinding.getNode(), markNode);
+                binding.mountedNodeRefs.forEach(node =>
+                    parentNode.removeChild(node),
+                );
+                next.push(newBinding);
             }
         });
 
+        // Add new bindings
+        values.slice(curr.length).forEach((value, index) => {
+            const binding = createNodeBinding(value, index);
+            fragment.appendChild(binding.getNode());
+            next.push(binding);
+        });
+        refNode.parentNode.insertBefore(fragment, refNode);
+
+        // Remove old bindings
+        const parentNode = refNode.parentNode;
+        curr.slice(values.length).forEach(binding => {
+            binding.mountedNodeRefs.forEach(node =>
+                parentNode.removeChild(node),
+            );
+        });
+
+        // Set new state
+        this.values = values;
+        this.bindings = next;
     }
 }
 
-const connectedFragments: WeakMap<Comment, NodeFragment> = new WeakMap();
+function createNodeBinding(
+    value: TemplateNodeValue,
+    index: number,
+): NodeBinding {
+    switch (getNodeValueType(value)) {
+        case NodeValueType.TEMPLATE_RESULT:
+            return new TemplateResultNodeBinding(
+                value as TemplateResult,
+                index,
+            );
+        case NodeValueType.TEXT:
+            return new StringNodeBinding(value as string | number, index);
+    }
+}
 
-function mountOrUpdateNodeValue(
-    nodeValue: Yeeld.TemplateNodeValue,
-    markNode: Comment,
-) {
+function mountNodeValue(nodeValue: TemplateNodeValue, refNode: Comment) {
     const nodeFragment =
-        connectedFragments.get(markNode) || new NodeFragment(nodeValue);
+        nodeFragmentRegistry.get(refNode) || new NodeFragment();
 
-    if (!nodeFragment.isMounted) {
-        nodeFragment.mount(markNode);
-        connectedFragments.set(markNode, nodeFragment);
-    } else {
-        nodeFragment.update(nodeValue);
+    nodeFragment.reconcile(refNode, nodeValue);
+    if (!nodeFragmentRegistry.has(refNode)) {
+        nodeFragmentRegistry.set(refNode, nodeFragment);
     }
 }
-
-const renderMarks = new WeakMap<HTMLElement, Comment>();
 
 export const render = (result, node) => {
-    let markNode: Comment;
+    let refNode: Comment;
 
-    if (renderMarks.has(node)) {
-        markNode = renderMarks.get(node);
+    if (renderRefNodeRegistry.has(node)) {
+        refNode = renderRefNodeRegistry.get(node);
     } else {
-        markNode = document.createComment('0');
-        node.appendChild(markNode);
-        renderMarks.set(node, markNode);
+        refNode = document.createComment('root');
+        node.appendChild(refNode);
+        renderRefNodeRegistry.set(node, refNode);
     }
 
-    mountOrUpdateNodeValue(result, markNode);
+    mountNodeValue(result, refNode);
 
     return node;
 };
 
-const cache: Yeeld.TemplateCache = new Map<TemplateStringsArray, Template>();
-
 export function html(strings: TemplateStringsArray, ...values: any[]) {
-    let template = cache.get(strings);
-
-    if (!template) {
-        template = new Template(strings);
-        cache.set(strings, template);
-    }
-
-    return new TemplateResult(template, values);
+    return new TemplateResult(strings, values);
 }
 
-const components = new Map<string, any>();
-
 export function define(name: string, component: any) {
-    components.set(name, component);
+    componentRegistry.set(name, component);
 }
