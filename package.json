@@ -2,9 +2,11 @@
   "name": "yeeld",
   "version": "0.1.0",
   "description": "A html templating library",
-  "main": "app.js",
+  "main": "dist/index.js",
+  "module": "dist/index.es.js",
   "scripts": {
     "dev": "tsc",
+    "build": "rollup -c",
     "test": "jest"
   },
   "keywords": [],
@@ -13,7 +15,11 @@
   "devDependencies": {
     "@types/jest": "^24.0.13",
     "jest": "^24.8.0",
+    "rollup": "^1.16.3",
+    "rollup-plugin-terser": "^5.0.0",
+    "rollup-plugin-typescript": "^1.0.1",
     "ts-jest": "^24.0.2",
+    "tslib": "^1.10.0",
     "typescript": "^3.5.1"
   }
 }
