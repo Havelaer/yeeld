@@ -31,7 +31,6 @@ export enum ValueType {
 }
 
 export enum NodeValueType {
-    NULL,
     TEXT,
     TEMPLATE_RESULT,
 }
@@ -43,11 +42,12 @@ export enum AttrValueType {
 
 /* regex */
 
-const markRegex = /\$\_(\d)\_\$/;
+const valueRegex = /\$v(\d)\$/;
+const componentRegex = /\$c(\d)\$/;
 
 /* registries */
 
-const nodeFragmentRegistry: WeakMap<Comment, NodeFragment> = new WeakMap();
+const nodeFragmentRegistry = new WeakMap<Comment, NodeFragment>();
 const renderRefNodeRegistry = new WeakMap<HTMLElement, Comment>();
 const componentRegistry = new Map<string, any>();
 
@@ -75,28 +75,38 @@ function getNodeValueType(value): NodeValueType {
     throw new Error(`Cant render type as NodeValue`);
 }
 
-// abstract class AttrBinding {
-//     private node = this.attr.ownerElement;
-//     private originalName = this.attr.name;
-//     private originalValue = this.attr.value;
+/*
 
-//     constructor(private attr: Attr) {}
-// }
+html`
+    <div>
+        <ah-content>
+            <h1>${title}</h1>
+            <ah-button>${buttonText}</ah-button>
+        </ah-content>
+    </div>
+`;
 
-// class TextAttrBinding extends AttrBinding {
-//     setValue(value: TemplateAttrValue) {}
+fragment =
+    <div>
+        <!--0-->
+    </div>
 
-//     commit() {}
-// }
+components
+    - component: ah-content
+      fragment:
+            <h1>${title}</h1>
+            <!--1-->
+    - component: ah-button
+      fragment:
+            <--$_0_$-->
 
-// class EventHandlerBinding extends AttrBinding {
-//     setValue(value: TemplateNodeValue) {}
 
-//     commit() {}
-// }
+*/
 
 class Template {
     private template!: HTMLTemplateElement;
+
+    public components = [];
 
     constructor(private strings: TemplateStringsArray) {
         const template = document.createElement('template');
@@ -114,12 +124,46 @@ class Template {
                 const commentEnd = state === ValueType.NODE ? '-->' : '';
 
                 return i < this.strings.length - 1
-                    ? `${str}${commentStart}$_${i}_$${commentEnd}`
+                    ? `${str}${commentStart}$v${i}$${commentEnd}`
                     : str;
             })
             .join('');
 
         this.template = template;
+
+        const walker = document.createTreeWalker(
+            this.template.content,
+            1,
+            null,
+            false,
+        );
+
+        const nodeList = [];
+        while (walker.nextNode()) {
+            nodeList.push(walker.currentNode as Element);
+        }
+
+        const components = [];
+        let index = 0;
+
+        nodeList.reverse().forEach(node => {
+            if (!componentRegistry.has(node.nodeName)) return;
+
+            const refNode = document.createComment(`$c${index}$`);
+            node.parentNode.insertBefore(refNode, node);
+            const fragment = document.createDocumentFragment();
+            Array.prototype.forEach.call(node.childNodes, node =>
+                fragment.appendChild(node),
+            );
+            node.parentNode.removeChild(node);
+            components.push({
+                fragment,
+                component: componentRegistry.get(node.nodeName),
+            });
+            index++;
+        });
+
+        this.components = components;
     }
 
     clone() {
@@ -149,9 +193,11 @@ export class TemplateResult {
 }
 
 class TemplateInstance {
+    private prevCycle: SetValuesCycle | null = null;
+
     private element: DocumentFragment = this.result.template.clone();
 
-    private bindings = new Array(this.result.values.length).fill(null);
+    private valueBindings = new Array(this.result.values.length).fill(null);
 
     constructor(public result: TemplateResult) {
         this.createBindings();
@@ -165,94 +211,106 @@ class TemplateInstance {
             false,
         );
         while (walker.nextNode()) {
-            const type = walker.currentNode.nodeType;
-            if (type === 1)
-                this.resolveAttrMarkers(walker.currentNode as Element);
-            else if (type === 8)
-                this.resolveNodeMarkers(walker.currentNode as Comment);
+            const current = walker.currentNode;
+            const type = current.nodeType;
+            if (type === 1) this.bindAttrMarkers(current as Element);
+            else if (type === 8) this.bindNodeMarkers(current as Comment);
         }
     }
 
-    private resolveAttrMarkers(node: Element) {
-        Array.prototype.forEach.call(node.attributes, attr =>
-            this.resolveAttr(attr),
-        );
-    }
+    private bindAttrMarkers(node: Element) {
+        const attrsTemplate = [];
+        const cleanUp = [];
 
-    private resolveAttr(attr: Attr) {
-        const matches = attr.value.match(/\$\_(\d)\_\$/g);
-        if (!matches) return;
+        Array.prototype.forEach.call(node.attributes, (attr: Attr, i) => {
+            const match = attr.name.match(valueRegex) || attr.value.match(valueRegex);
+            if (!match) return attrsTemplate.push({ [attr.name]: attr.value });
 
-        const node = attr.ownerElement;
+            const isSpread = match[0] === attr.name;
+            const index = parseInt(match[1], 10);
+            attrsTemplate.push(isSpread ? attr.name : { [attr.name]: attr.value });
+            this.valueBindings[index] = (cycle, value) => {
+                cycle.setAttrValue(node, attrsTemplate, i, isSpread ? value : { [attr.name]: value });
+            };
 
-        matches.forEach(match => {
-            const index = parseInt(match[2], 10);
-
-            if (attr.name.startsWith('on')) {
-                this.bindings[index] = {
-                    node: attr.ownerElement,
-                    originalName: attr.name,
-                    originalValue: attr.value,
-                    eventName: attr.name.replace(/^on/, ''),
-                    prevValue: null,
-                    setValue(value) {
-                        if (this.originalValue !== `$_${index}_$`) {
-                            throw new Error(
-                                'Cant handle interpolate function in string',
-                            );
-                        }
-                        if (this.prevValue) {
-                            node.removeEventListener(
-                                this.eventName,
-                                this.prevValue,
-                            );
-                        }
-                        node.addEventListener(this.eventName, value);
-                        this.prevValue = value;
-                    },
-                    commit() {},
-                };
-                node.removeAttribute(attr.name);
-            } else {
-                this.bindings[index] = {
-                    node: attr.ownerElement,
-                    originalName: attr.name,
-                    originalValue: attr.value,
-                    intermediateValue: null,
-                    setValue(value) {
-                        (attr as any)._value = (
-                            (attr as any)._value || this.originalValue
-                        ).replace(`$_${index}_$`, value);
-                        attr.value = (attr as any)._value;
-                    },
-                    commit() {
-                        delete (attr as any)._value;
-                    },
-                };
-            }
+            cleanUp.push(attr);
         });
+
+        cleanUp.forEach(attr => node.attributes.removeNamedItem(attr.name));
     }
 
-    private resolveNodeMarkers(node: Comment) {
-        const match = node.nodeValue.match(markRegex);
-        if (!match || match.length === 0) return;
+    private bindNodeMarkers(node: Comment) {
+        const valueMatch = node.nodeValue.match(valueRegex);
+        if (valueMatch && valueMatch[1]) {
+            const index = parseInt(valueMatch[1], 10);
+            this.valueBindings[index] = (cycle, value) => {
+                cycle.setNodeValue(node, value);
+            };
+            return;
+        }
 
-        const index = parseInt(match[1], 10);
-        this.bindings[index] = {
-            setValue(value) {
-                mountNodeValue(value, node);
-            },
-            commit() {},
-        };
+        const componentMatch = node.nodeValue.match(componentRegex);
+        if (componentMatch && componentMatch[1]) {
+            const index = parseInt(componentMatch[1], 10);
+            const component = this.result.template.components[index];
+            mountNodeValue(component.component({}), node);
+        }
     }
 
     setValues(values: TemplateValue[]) {
-        this.bindings.forEach((binding, i) => binding.setValue(values[i]));
-        this.bindings.forEach((binding, i) => binding.commit());
+        const cycle = new SetValuesCycle(this.prevCycle);
+        this.valueBindings.forEach((binding, i) => binding(cycle, values[i]));
+        cycle.commit();
+        this.prevCycle = cycle;
     }
 
     toElement() {
         return this.element;
+    }
+}
+
+class SetValuesCycle {
+    private map = new WeakMap<Element, Record<string, TemplateAttrValue>[]>();
+
+    private attrNodes = [];
+
+    constructor(private prevCycle: SetValuesCycle) {}
+
+    setNodeValue(
+        node: Comment,
+        value: TemplateNodeValue
+    ) {
+        mountNodeValue(value, node);
+    }
+
+    setAttrValue(
+        node: Element,
+        attrsTemplate: any[],
+        index: number,
+        value: Record<string, TemplateAttrValue>,
+    ) {
+        if (!this.map.has(node)) {
+            const attrs = attrsTemplate.concat();
+            this.attrNodes.push(node);
+            this.map.set(node, attrs);
+        }
+        const attrs = this.map.get(node);
+        attrs.splice(index, 1, value);
+    }
+
+    commit() {
+        this.attrNodes.forEach(node => {
+            const attrs = this.map.get(node);
+            const attrsSquashed = Object.assign({}, ...attrs);
+            const attrsSquashedPrev = this.prevCycle ? this.prevCycle.map.get(node) : {};
+            this.map.set(node, attrsSquashed);
+
+            Object.keys(attrsSquashed).forEach(attr => {
+                updateAttrValue(node, attr, attrsSquashed[attr], attrsSquashedPrev[attr]);
+            });
+        });
+
+        delete this.prevCycle;
     }
 }
 
@@ -264,8 +322,6 @@ interface NodeBinding {
     setValue(value: TemplateNodeValue): void;
     isSame(value): boolean;
     getNode(): Node;
-    // insertBefore(markNode: Element | Comment): void;
-    // replace(binding: NodeBinding): void;
 }
 
 class TemplateResultNodeBinding implements NodeBinding {
@@ -314,7 +370,7 @@ class TemplateResultNodeBinding implements NodeBinding {
     }
 }
 
-class StringNodeBinding {
+class StringNodeBinding implements NodeBinding {
     private element: Text;
 
     public mountedNodeRefs: Node[];
@@ -412,6 +468,42 @@ class NodeFragment {
     }
 }
 
+function updateAttrEventHandlerValue(node: Element, key: string, value: EventHandler, prevValue?: EventHandler) {
+    const eventName = key.replace(/^on/, '');
+    if (prevValue) node.removeEventListener(eventName, prevValue);
+    node.addEventListener(eventName, value);
+}
+
+function updateAttrTextValue(node: Element, key: string, value: string, prevValue?: string) {
+    node.setAttribute(key, value);
+}
+
+function updateAttrInputValueValue(node: Element, key: string, value: string, prevValue?: string) {
+    if (!prevValue) node.setAttribute(key, value);
+    else (node as any).value = value;
+}
+
+const booleanAttrs = ['checked', 'disabled']; // TODO add more
+function updateAttrBooleanValue(node: Element, key: string, value: boolean, prevValue?: boolean) {
+    if (value) {
+        node.setAttribute(key, key); // eg. disabled="disabled"
+    } else {
+        node.removeAttribute(key);
+    }
+}
+
+function updateAttrValue(node: Element, key: string, value: TemplateAttrValue, prevValue?: TemplateAttrValue) {
+    if (key.startsWith('on')) {
+        updateAttrEventHandlerValue(node, key, value as EventHandler, prevValue as EventHandler);
+    } else if (key === 'value') {
+        updateAttrInputValueValue(node, key, value as string, prevValue as string);
+    } else if (booleanAttrs.indexOf(key) > -1) {
+        updateAttrBooleanValue(node, key, value as boolean, prevValue as boolean);
+    } else {
+        updateAttrTextValue(node, key, value as string);
+    }
+}
+
 function createNodeBinding(
     value: TemplateNodeValue,
     index: number,
@@ -453,10 +545,10 @@ export const render = (result, node) => {
     return node;
 };
 
-export function html(strings: TemplateStringsArray, ...values: any[]) {
+export function html(strings: TemplateStringsArray, ...values: TemplateValue[]) {
     return new TemplateResult(strings, values);
 }
 
 export function define(name: string, component: any) {
-    componentRegistry.set(name, component);
+    componentRegistry.set(name.toUpperCase(), component);
 }

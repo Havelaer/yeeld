@@ -28,10 +28,35 @@ html`
     <primary-button>submit</primary-button>
 `
 
+function * Button(props, ctx) {
+    yield html`
+        <button>
+            <slot name="icon" />
+            <slot />
+        </button>
+    `;
+}
+
+define('primary-button', Button);
+
+function* Component({ icon }) {
+    yield html`
+        <div>
+            <primary-button>
+                ${icon && html`<img slot="icon" src="/asdf" />`}
+                text
+            </primary-button>
+            <slot />
+        </div>
+    `
+}
+
 function * Component() {
     yield html`<span>loading...</span>`;
     const { error, data } = yield call(fetch, 'http://example.com/users.json');
-    yield error ? html`<span>error</span>` : html`<span>loaded!</span>`;
+    yield error
+        ? html`<span>error</span>`
+        : html`<span>loaded!</span>`;
 }
 
 function * Component() {

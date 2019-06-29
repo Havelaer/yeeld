@@ -1,4 +1,4 @@
-import { html, render, TemplateResult } from './html';
+import { html, render, TemplateResult, define } from './html';
 
 function triggerEvent(elem, event) {
     const clickEvent = new Event(event); // Create the event.
@@ -211,14 +211,43 @@ describe('render', () => {
     });
 
     describe('html`` attribute values', () => {
-        describe('text', () => {
+        describe('spread attributes', () => {
             let root;
 
             beforeEach(() => {
                 root = document.createElement('div');
             });
 
-            it('should render attribute text value without quotes', () => {
+            it('should render spread attributes', () => {
+                const tmpl = (val1, val2, val3) => html`
+                    <div
+                        attr1="foo"
+                        attr2=${val1}
+                        ${val2}
+                        attr3="bar"
+                        attr4=${val3}
+                    />
+                `;
+                render(
+                    tmpl('111', { attr1: 'qaz', attr3: 'baz' }, '333'),
+                    root,
+                );
+                const div = root.querySelector('div');
+                expect(div.getAttribute('attr1')).toBe('qaz');
+                expect(div.getAttribute('attr2')).toBe('111');
+                expect(div.getAttribute('attr3')).toBe('bar');
+                expect(div.getAttribute('attr4')).toBe('333');
+            });
+        });
+
+        describe('text attributes', () => {
+            let root;
+
+            beforeEach(() => {
+                root = document.createElement('div');
+            });
+
+            it('should render title attribute', () => {
                 const tmpl = title => html`
                     <h1 title=${title}>hello</h1>
                 `;
@@ -227,39 +256,64 @@ describe('render', () => {
                     'hello',
                 );
             });
+        });
 
-            it('should render attribute text value with quotes', () => {
-                const tmpl = title => html`
-                    <h1 title="${title}">hello</h1>
-                `;
-                render(tmpl('hello'), root);
-                expect(root.querySelector('h1').getAttribute('title')).toBe(
-                    'hello',
-                );
+        describe('boolean attributes', () => {
+            let root;
+
+            beforeEach(() => {
+                root = document.createElement('div');
             });
 
-            it('should render attribute inline text value', () => {
-                const tmpl = title => html`
-                    <h1 title="foo ${title} bar">hello</h1>
+            it('should render boolean attribute true', () => {
+                const tmpl = bool => html`
+                    <input disabled=${bool} checked=${bool} />
                 `;
-                render(tmpl('hello'), root);
-                expect(root.querySelector('h1').getAttribute('title')).toBe(
-                    'foo hello bar',
-                );
+                render(tmpl(true), root);
+                const input = root.querySelector('input');
+                expect(input.getAttribute('disabled')).toBe('disabled');
+                expect(input.disabled).toBe(true);
+                expect(input.getAttribute('checked')).toBe('checked');
+                expect(input.checked).toBe(true);
             });
 
-            it('should render attribute text with multiple values', () => {
-                const tmpl = (val1, val2) => html`
-                    <h1 title="foo ${val1} bar ${val2} qaz">hello</h1>
+            it('should render boolean attribute false', () => {
+                const tmpl = bool => html`
+                    <input disabled=${bool} checked=${bool} />
                 `;
-                render(tmpl('aaa', 'bbb'), root);
-                expect(root.querySelector('h1').getAttribute('title')).toBe(
-                    'foo aaa bar bbb qaz',
-                );
+                render(tmpl(false), root);
+                const input = root.querySelector('input');
+                expect(input.getAttribute('disabled')).toBe(null);
+                expect(input.disabled).toBe(false);
+                expect(input.getAttribute('checked')).toBe(null);
+                expect(input.checked).toBe(false);
             });
         });
 
-        describe('function', () => {
+        describe('value (input) attribute', () => {
+            let root;
+
+            beforeEach(() => {
+                root = document.createElement('div');
+            });
+
+            it('should render value attribute', () => {
+                const tmpl = value => html`
+                    <input value=${value} />
+                `;
+                render(tmpl('hello'), root);
+                const input = root.querySelector('input');
+                expect(input.getAttribute('value')).toBe('hello');
+                expect(input.value).toBe('hello');
+
+                render(tmpl('hello changed'), root);
+                // value **attr** is initial value, value **property** is current value
+                expect(input.getAttribute('value')).toBe('hello');
+                expect(input.value).toBe('hello changed');
+            });
+        });
+
+        describe('eventHandler', () => {
             let root;
 
             beforeEach(() => {
@@ -276,6 +330,82 @@ describe('render', () => {
                 const button = root.querySelector('button');
                 triggerEvent(button, 'click');
                 expect(counter).toBe(1);
+            });
+        });
+    });
+
+    describe('html`` components', () => {
+        describe('text', () => {
+            let root;
+
+            beforeEach(() => {
+                root = document.createElement('div');
+            });
+
+            it('should render component', () => {
+                const Component = () =>
+                    html`
+                        <h1>hello</h1>
+                    `;
+
+                define('test1', Component);
+
+                render(
+                    html`
+                        <test1 />
+                    `,
+                    root,
+                );
+                expect(root.textContent.trim()).toBe('hello');
+            });
+
+            xit('should render component props', () => {
+                const Component = props =>
+                    html`
+                        <h1 class=${props.class}>hello</h1>
+                    `;
+
+                define('test2', Component);
+
+                render(
+                    html`
+                        <test2 class="header"></test2>
+                    `,
+                    root,
+                );
+                expect(root.querySelector('h1').getAttribute('class')).toBe('hello');
+            });
+
+            xit('should render component default slot', () => {
+                const Component = () =>
+                    html`
+                        <h1><slot /></h1>
+                    `;
+
+                define('test2', Component);
+
+                render(
+                    html`
+                        <test2>hello</test2>
+                    `,
+                    root,
+                );
+            });
+
+            xit('should render component default slot', () => {
+                const Component = () =>
+                    html`
+                        <h1><slot name="test-slot" /></h1>
+                    `;
+
+                define('test2', Component);
+
+                render(
+                    html`
+                        <test2><span slot="test-slot">hello</span></test2>
+                    `,
+                    root,
+                );
             });
         });
     });
@@ -323,23 +453,45 @@ describe('update', () => {
     });
 
     describe('varrying template values', () => {
-        it('should handle updating different value types', () => {
+        xit('should handle updating different value types', () => {
             render('one', root);
             expect(root.textContent).toBe('one');
 
-            render(html`<span>two</span>`, root);
+            render(
+                html`
+                    <span>two</span>
+                `,
+                root,
+            );
             expect(root.textContent).toBe('two');
 
             render('three', root);
             expect(root.textContent).toBe('three');
 
-            render(html`<span>four</span><span>five</span>`, root);
+            render(
+                html`
+                    <span>four</span><span>five</span>
+                `,
+                root,
+            );
             expect(root.textContent).toBe('fourfive');
 
             render('six', root);
             expect(root.textContent).toBe('six');
 
-            render(html`${[ html`<span>seven</span>`, html`<span>eight</span>`]}`, root);
+            render(
+                html`
+                    ${[
+                        html`
+                            <span>seven</span>
+                        `,
+                        html`
+                            <span>eight</span>
+                        `,
+                    ]}
+                `,
+                root,
+            );
             expect(root.textContent).toBe('seveneight');
 
             render('nine', root);
@@ -348,7 +500,14 @@ describe('update', () => {
 
         it('should handle updating different value types lengths', () => {
             const fn = items => html`
-                <ul>${items.map(item => html`<li>${item}</li>`)}</ul>
+                <ul>
+                    ${items.map(
+                        item =>
+                            html`
+                                <li>${item}</li>
+                            `,
+                    )}
+                </ul>
             `;
 
             render(fn(['one']), root);
