@@ -471,7 +471,7 @@ describe('update', () => {
     });
 
     describe('varrying template values', () => {
-        xit('should handle updating different value types', () => {
+        it('should handle updating different value types', () => {
             render('one', root);
             expect(root.textContent).toBe('one');
 
@@ -481,10 +481,10 @@ describe('update', () => {
                 `,
                 root,
             );
-            expect(root.textContent).toBe('two');
+            expect(root.textContent.trim()).toBe('two');
 
             render('three', root);
-            expect(root.textContent).toBe('three');
+            expect(root.textContent.trim()).toBe('three');
 
             render(
                 html`
@@ -492,10 +492,10 @@ describe('update', () => {
                 `,
                 root,
             );
-            expect(root.textContent).toBe('fourfive');
+            expect(root.textContent.trim()).toBe('fourfive');
 
             render('six', root);
-            expect(root.textContent).toBe('six');
+            expect(root.textContent.trim()).toBe('six');
 
             render(
                 html`
@@ -510,10 +510,10 @@ describe('update', () => {
                 `,
                 root,
             );
-            expect(root.textContent).toBe('seveneight');
+            expect(root.textContent.replace(/\s/g, '')).toBe('seveneight');
 
             render('nine', root);
-            expect(root.textContent).toBe('nine');
+            expect(root.textContent.trim()).toBe('nine');
         });
 
         it('should handle updating different value types lengths', () => {
