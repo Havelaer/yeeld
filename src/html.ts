@@ -76,34 +76,6 @@ function getNodeValueType(value): NodeValueType {
     throw new Error(`Cant render type as NodeValue`);
 }
 
-/*
-
-html`
-    <div>
-        <ah-content>
-            <h1>${title}</h1>
-            <ah-button>${buttonText}</ah-button>
-        </ah-content>
-    </div>
-`;
-
-fragment =
-    <div>
-        <!--$c0$-->
-    </div>
-
-components
-    - component: ah-content
-      fragment:
-            <h1>${title}</h1>
-            <!--$c1$-->
-    - component: ah-button
-      fragment:
-            <--$v0$-->
-
-
-*/
-
 class Template {
     private template!: HTMLTemplateElement;
 
