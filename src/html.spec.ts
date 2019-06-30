@@ -451,6 +451,28 @@ describe('render', () => {
                 const div = root.querySelector('div');
                 expect(div.textContent).toContain('override default slot');
             });
+
+            it('should render dynamic slots', () => {
+                const Component = () =>
+                    html`
+                        <div class="comp">
+                            ${html`<slot>default slot placeholder</slot>`}
+                        </div>
+                    `;
+
+                define('test2', Component);
+
+                render(
+                    html`
+                        <test2>
+                            override default slot
+                        </test2>
+                    `,
+                    root,
+                );
+                const div = root.querySelector('div');
+                expect(div.textContent).toContain('override default slot');
+            });
         });
     });
 });

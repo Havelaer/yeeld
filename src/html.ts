@@ -252,6 +252,10 @@ class TemplateInstance {
         if (valueMatch && valueMatch[1]) {
             const index = parseInt(valueMatch[1], 10);
             this.valueBindings[index] = (cycle, value) => {
+                if (value instanceof TemplateResult) {
+                    // TODO test extensively!
+                    value.attachSlots(this.result.slots);
+                }
                 cycle.setNodeValue(node, value);
             };
             return;
