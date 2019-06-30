@@ -141,7 +141,7 @@ class Template {
             false,
         );
 
-        const nodeList = [];
+        const nodeList: Element[] = [];
         while (walker.nextNode()) {
             nodeList.push(walker.currentNode as Element);
         }
@@ -156,7 +156,9 @@ class Template {
                 const refNode = document.createComment(`$s:${name}$`);
                 node.parentNode.insertBefore(refNode, node);
                 const fragment = document.createDocumentFragment();
-                Array.prototype.forEach.call(node.childNodes, node => {
+                const children = Array.from(node.childNodes);
+
+                children.forEach(node => {
                     fragment.appendChild(node);
                 });
                 this.slotPlaceholders[name] = fragment;
@@ -170,18 +172,19 @@ class Template {
             const refNode = document.createComment(`$c${index}$`);
             node.parentNode.insertBefore(refNode, node);
             const slotTargets = {};
-            Array.prototype.forEach.call(node.childNodes, node => {
+            const children = Array.from(node.childNodes);
+            children.forEach((child: Element) => {
                 const slotName =
-                    (node.getAttribute && node.getAttribute('slot')) ||
+                    (child.getAttribute && child.getAttribute('slot')) ||
                     'default';
                 if (!slotTargets[slotName])
                     slotTargets[slotName] = document.createDocumentFragment();
-                slotTargets[slotName].appendChild(node);
+                slotTargets[slotName].appendChild(child);
             });
             node.parentNode.removeChild(node);
             components.push({
-                slotTargets, // <span slot="target-name"
-                component: componentRegistry.get(node.nodeName), // <test>
+                slotTargets,
+                name: node.nodeName,
             });
             index++;
         });
@@ -285,9 +288,20 @@ class TemplateInstance {
         const componentMatch = node.nodeValue.match(componentRegex);
         if (componentMatch && componentMatch[1]) {
             const index = parseInt(componentMatch[1], 10);
-            const component = this.result.template.components[index];
-            const componentResult = component.component({});
-            componentResult.attachSlots(component.slotTargets);
+            const child = this.result.template.components[index];
+            if (!child) return;
+            const component = componentRegistry.get(child.name);
+            const componentResult = component({});
+            const slotTargets = Object.keys(child.slotTargets).reduce(
+                (slotTargets, target) => {
+                    slotTargets[target] = this.createBindings(
+                        child.slotTargets[target].cloneNode(true),
+                    );
+                    return slotTargets;
+                },
+                {},
+            );
+            componentResult.attachSlots(slotTargets);
             mountNodeValue(componentResult, node);
         }
 
@@ -297,9 +311,9 @@ class TemplateInstance {
             const slotContent =
                 (this.result.slots && this.result.slots[slotName]) ||
                 this.result.template.slotPlaceholders[slotName];
+
             if (slotContent) {
-                const boundSlotContent = this.createBindings(slotContent.cloneNode(true));
-                node.parentNode.insertBefore(boundSlotContent, node);
+                node.parentNode.insertBefore(slotContent, node);
             }
         }
     }

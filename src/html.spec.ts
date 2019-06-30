@@ -373,13 +373,19 @@ describe('render', () => {
                     `,
                     root,
                 );
-                expect(root.querySelector('h1').getAttribute('class')).toBe('hello');
+                expect(root.querySelector('h1').getAttribute('class')).toBe(
+                    'hello',
+                );
             });
 
-            it('should render slot placeholder content, when no slot content is provided', () => {
+            it('should render mixed slot placeholders', () => {
                 const Component = () =>
                     html`
-                        <h1><slot>Default slot content</slot></h1>
+                        <div class="test">
+                            <slot>default slot placeholder</slot>
+                            <slot name="slot1">slot1 placeholder</slot>
+                            <slot name="slot2">slot2 placeholder</slot>
+                        </div>
                     `;
 
                 define('test2', Component);
@@ -390,40 +396,60 @@ describe('render', () => {
                     `,
                     root,
                 );
-                expect(root.querySelector('h1').textContent).toBe('Default slot content');
+                const div = root.querySelector('div');
+                expect(div.textContent).toContain('default slot placeholder');
+                expect(div.textContent).toContain('slot1 placeholder');
+                expect(div.textContent).toContain('slot2 placeholder');
             });
 
-            it('should render provided slot content', () => {
+            it('should render mixed slot content', () => {
                 const Component = () =>
                     html`
-                        <h1><slot>Default slot content</slot></h1>
+                        <div class="test">
+                            <slot>default slot placeholder</slot>
+                            <slot name="slot1">slot1 placeholder</slot>
+                            <slot name="slot2">slot2 placeholder</slot>
+                        </div>
                     `;
 
                 define('test2', Component);
 
                 render(
                     html`
-                        <test2>Override slot content</test2>
+                        <test2>
+                            <div slot="slot1">override slot1</div>
+                            <span slot="slot2">override slot2</span>
+                            override default slot
+                        </test2>
                     `,
                     root,
                 );
-                expect(root.querySelector('h1').textContent).toBe('Override slot content');
+                const div = root.querySelector('div');
+                expect(div.textContent).toContain('override default slot');
+                expect(div.textContent).toContain('override slot1');
+                expect(div.textContent).toContain('override slot2');
             });
 
-            it('should render component named slot', () => {
+            it('should render slots in nested components', () => {
                 const Component = () =>
                     html`
-                        <h1><slot name="test-slot" /></h1>
+                        <div class="comp">
+                            <slot>default slot placeholder</slot>
+                        </div>
                     `;
 
                 define('test2', Component);
 
                 render(
                     html`
-                        <test2><span slot="test-slot">hello</span></test2>
+                        <test2>
+                            <test2>override default slot</test2>
+                        </test2>
                     `,
                     root,
                 );
+                const div = root.querySelector('div');
+                expect(div.textContent).toContain('override default slot');
             });
         });
     });
