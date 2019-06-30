@@ -44,6 +44,7 @@ export enum AttrValueType {
 
 const valueRegex = /\$v(\d)\$/;
 const componentRegex = /\$c(\d)\$/;
+const slotRegex = /\$s:([A-Za-z0-9]+)\$/;
 
 /* registries */
 
@@ -88,17 +89,17 @@ html`
 
 fragment =
     <div>
-        <!--0-->
+        <!--$c0$-->
     </div>
 
 components
     - component: ah-content
       fragment:
             <h1>${title}</h1>
-            <!--1-->
+            <!--$c1$-->
     - component: ah-button
       fragment:
-            <--$_0_$-->
+            <--$v0$-->
 
 
 */
@@ -107,6 +108,8 @@ class Template {
     private template!: HTMLTemplateElement;
 
     public components = [];
+
+    public slotPlaceholders = {};
 
     constructor(private strings: TemplateStringsArray) {
         const template = document.createElement('template');
@@ -147,18 +150,38 @@ class Template {
         let index = 0;
 
         nodeList.reverse().forEach(node => {
+            // slot
+            if (node.nodeName === 'SLOT') {
+                const name = node.getAttribute('name') || 'default';
+                const refNode = document.createComment(`$s:${name}$`);
+                node.parentNode.insertBefore(refNode, node);
+                const fragment = document.createDocumentFragment();
+                Array.prototype.forEach.call(node.childNodes, node => {
+                    fragment.appendChild(node);
+                });
+                this.slotPlaceholders[name] = fragment;
+                node.parentNode.removeChild(node);
+                return;
+            }
+
             if (!componentRegistry.has(node.nodeName)) return;
 
+            // component
             const refNode = document.createComment(`$c${index}$`);
             node.parentNode.insertBefore(refNode, node);
-            const fragment = document.createDocumentFragment();
-            Array.prototype.forEach.call(node.childNodes, node =>
-                fragment.appendChild(node),
-            );
+            const slotTargets = {};
+            Array.prototype.forEach.call(node.childNodes, node => {
+                const slotName =
+                    (node.getAttribute && node.getAttribute('slot')) ||
+                    'default';
+                if (!slotTargets[slotName])
+                    slotTargets[slotName] = document.createDocumentFragment();
+                slotTargets[slotName].appendChild(node);
+            });
             node.parentNode.removeChild(node);
             components.push({
-                fragment,
-                component: componentRegistry.get(node.nodeName),
+                slotTargets, // <span slot="target-name"
+                component: componentRegistry.get(node.nodeName), // <test>
             });
             index++;
         });
@@ -176,6 +199,8 @@ export class TemplateResult {
 
     public template: Template;
 
+    public slots: any;
+
     constructor(
         public strings: TemplateStringsArray,
         public values: TemplateValue[],
@@ -190,6 +215,10 @@ export class TemplateResult {
 
         this.template = template;
     }
+
+    attachSlots(slots: any) {
+        this.slots = slots;
+    }
 }
 
 class TemplateInstance {
@@ -200,22 +229,18 @@ class TemplateInstance {
     private valueBindings = new Array(this.result.values.length).fill(null);
 
     constructor(public result: TemplateResult) {
-        this.createBindings();
+        this.createBindings(this.element);
     }
 
-    private createBindings() {
-        const walker = document.createTreeWalker(
-            this.element,
-            129, // ELEMENT + COMMENT
-            null,
-            false,
-        );
+    private createBindings(root: Element | DocumentFragment) {
+        const walker = document.createTreeWalker(root, 129, null, false); // 129: ELEMENT + COMMENT
         while (walker.nextNode()) {
             const current = walker.currentNode;
             const type = current.nodeType;
             if (type === 1) this.bindAttrMarkers(current as Element);
             else if (type === 8) this.bindNodeMarkers(current as Comment);
         }
+        return root;
     }
 
     private bindAttrMarkers(node: Element) {
@@ -223,14 +248,22 @@ class TemplateInstance {
         const cleanUp = [];
 
         Array.prototype.forEach.call(node.attributes, (attr: Attr, i) => {
-            const match = attr.name.match(valueRegex) || attr.value.match(valueRegex);
+            const match =
+                attr.name.match(valueRegex) || attr.value.match(valueRegex);
             if (!match) return attrsTemplate.push({ [attr.name]: attr.value });
 
             const isSpread = match[0] === attr.name;
             const index = parseInt(match[1], 10);
-            attrsTemplate.push(isSpread ? attr.name : { [attr.name]: attr.value });
+            attrsTemplate.push(
+                isSpread ? attr.name : { [attr.name]: attr.value },
+            );
             this.valueBindings[index] = (cycle, value) => {
-                cycle.setAttrValue(node, attrsTemplate, i, isSpread ? value : { [attr.name]: value });
+                cycle.setAttrValue(
+                    node,
+                    attrsTemplate,
+                    i,
+                    isSpread ? value : { [attr.name]: value },
+                );
             };
 
             cleanUp.push(attr);
@@ -253,7 +286,21 @@ class TemplateInstance {
         if (componentMatch && componentMatch[1]) {
             const index = parseInt(componentMatch[1], 10);
             const component = this.result.template.components[index];
-            mountNodeValue(component.component({}), node);
+            const componentResult = component.component({});
+            componentResult.attachSlots(component.slotTargets);
+            mountNodeValue(componentResult, node);
+        }
+
+        const slotMatch = node.nodeValue.match(slotRegex);
+        if (slotMatch && slotMatch[1]) {
+            const slotName = slotMatch[1];
+            const slotContent =
+                (this.result.slots && this.result.slots[slotName]) ||
+                this.result.template.slotPlaceholders[slotName];
+            if (slotContent) {
+                const boundSlotContent = this.createBindings(slotContent.cloneNode(true));
+                node.parentNode.insertBefore(boundSlotContent, node);
+            }
         }
     }
 
@@ -276,10 +323,7 @@ class SetValuesCycle {
 
     constructor(private prevCycle: SetValuesCycle) {}
 
-    setNodeValue(
-        node: Comment,
-        value: TemplateNodeValue
-    ) {
+    setNodeValue(node: Comment, value: TemplateNodeValue) {
         mountNodeValue(value, node);
     }
 
@@ -302,11 +346,18 @@ class SetValuesCycle {
         this.attrNodes.forEach(node => {
             const attrs = this.map.get(node);
             const attrsSquashed = Object.assign({}, ...attrs);
-            const attrsSquashedPrev = this.prevCycle ? this.prevCycle.map.get(node) : {};
+            const attrsSquashedPrev = this.prevCycle
+                ? this.prevCycle.map.get(node)
+                : {};
             this.map.set(node, attrsSquashed);
 
             Object.keys(attrsSquashed).forEach(attr => {
-                updateAttrValue(node, attr, attrsSquashed[attr], attrsSquashedPrev[attr]);
+                updateAttrValue(
+                    node,
+                    attr,
+                    attrsSquashed[attr],
+                    attrsSquashedPrev[attr],
+                );
             });
         });
 
@@ -340,7 +391,7 @@ class TemplateResultNodeBinding implements NodeBinding {
         this.instance = new TemplateInstance(templateResult);
         this.instance.setValues(templateResult.values);
         this.element = this.instance.toElement();
-        this.mountedNodeRefs = [].map.call(
+        this.mountedNodeRefs = Array.prototype.map.call(
             this.element.children,
             child => child,
         );
@@ -426,6 +477,7 @@ class NodeFragment {
         const curr = this.bindings;
         const next = [];
         const fragment = document.createDocumentFragment();
+        // let lastNode: Node = refNode;
 
         // Update existing bindings
         values.slice(0, curr.length).forEach((value, index) => {
@@ -434,6 +486,8 @@ class NodeFragment {
             if (binding.isSame(value)) {
                 binding.setValue(value);
                 next.push(binding);
+                // lastNode =
+                //     binding.mountedNodeRefs[binding.mountedNodeRefs.length - 1];
             } else {
                 const newBinding = createNodeBinding(value, index);
                 const markNode = binding.mountedNodeRefs[0];
@@ -443,6 +497,10 @@ class NodeFragment {
                     parentNode.removeChild(node),
                 );
                 next.push(newBinding);
+                // lastNode =
+                //     newBinding.mountedNodeRefs[
+                //         newBinding.mountedNodeRefs.length - 1
+                //     ];
             }
         });
 
@@ -452,7 +510,10 @@ class NodeFragment {
             fragment.appendChild(binding.getNode());
             next.push(binding);
         });
-        refNode.parentNode.insertBefore(fragment, refNode);
+        refNode.parentNode.insertBefore(
+            fragment,
+            refNode /* lastNode.nextSibling */,
+        );
 
         // Remove old bindings
         const parentNode = refNode.parentNode;
@@ -468,23 +529,43 @@ class NodeFragment {
     }
 }
 
-function updateAttrEventHandlerValue(node: Element, key: string, value: EventHandler, prevValue?: EventHandler) {
+function updateAttrEventHandlerValue(
+    node: Element,
+    key: string,
+    value: EventHandler,
+    prevValue?: EventHandler,
+) {
     const eventName = key.replace(/^on/, '');
     if (prevValue) node.removeEventListener(eventName, prevValue);
     node.addEventListener(eventName, value);
 }
 
-function updateAttrTextValue(node: Element, key: string, value: string, prevValue?: string) {
+function updateAttrTextValue(
+    node: Element,
+    key: string,
+    value: string,
+    prevValue?: string,
+) {
     node.setAttribute(key, value);
 }
 
-function updateAttrInputValueValue(node: Element, key: string, value: string, prevValue?: string) {
+function updateAttrInputValueValue(
+    node: Element,
+    key: string,
+    value: string,
+    prevValue?: string,
+) {
     if (!prevValue) node.setAttribute(key, value);
     else (node as any).value = value;
 }
 
 const booleanAttrs = ['checked', 'disabled']; // TODO add more
-function updateAttrBooleanValue(node: Element, key: string, value: boolean, prevValue?: boolean) {
+function updateAttrBooleanValue(
+    node: Element,
+    key: string,
+    value: boolean,
+    prevValue?: boolean,
+) {
     if (value) {
         node.setAttribute(key, key); // eg. disabled="disabled"
     } else {
@@ -492,13 +573,33 @@ function updateAttrBooleanValue(node: Element, key: string, value: boolean, prev
     }
 }
 
-function updateAttrValue(node: Element, key: string, value: TemplateAttrValue, prevValue?: TemplateAttrValue) {
+function updateAttrValue(
+    node: Element,
+    key: string,
+    value: TemplateAttrValue,
+    prevValue?: TemplateAttrValue,
+) {
     if (key.startsWith('on')) {
-        updateAttrEventHandlerValue(node, key, value as EventHandler, prevValue as EventHandler);
+        updateAttrEventHandlerValue(
+            node,
+            key,
+            value as EventHandler,
+            prevValue as EventHandler,
+        );
     } else if (key === 'value') {
-        updateAttrInputValueValue(node, key, value as string, prevValue as string);
+        updateAttrInputValueValue(
+            node,
+            key,
+            value as string,
+            prevValue as string,
+        );
     } else if (booleanAttrs.indexOf(key) > -1) {
-        updateAttrBooleanValue(node, key, value as boolean, prevValue as boolean);
+        updateAttrBooleanValue(
+            node,
+            key,
+            value as boolean,
+            prevValue as boolean,
+        );
     } else {
         updateAttrTextValue(node, key, value as string);
     }
@@ -545,10 +646,13 @@ export const render = (result, node) => {
     return node;
 };
 
-export function html(strings: TemplateStringsArray, ...values: TemplateValue[]) {
+export function html(
+    strings: TemplateStringsArray,
+    ...values: TemplateValue[]
+) {
     return new TemplateResult(strings, values);
 }
 
-export function define(name: string, component: any) {
+export function define(name: string, component: Function | Generator) {
     componentRegistry.set(name.toUpperCase(), component);
 }

@@ -376,23 +376,41 @@ describe('render', () => {
                 expect(root.querySelector('h1').getAttribute('class')).toBe('hello');
             });
 
-            xit('should render component default slot', () => {
+            it('should render slot placeholder content, when no slot content is provided', () => {
                 const Component = () =>
                     html`
-                        <h1><slot /></h1>
+                        <h1><slot>Default slot content</slot></h1>
                     `;
 
                 define('test2', Component);
 
                 render(
                     html`
-                        <test2>hello</test2>
+                        <test2></test2>
                     `,
                     root,
                 );
+                expect(root.querySelector('h1').textContent).toBe('Default slot content');
             });
 
-            xit('should render component default slot', () => {
+            it('should render provided slot content', () => {
+                const Component = () =>
+                    html`
+                        <h1><slot>Default slot content</slot></h1>
+                    `;
+
+                define('test2', Component);
+
+                render(
+                    html`
+                        <test2>Override slot content</test2>
+                    `,
+                    root,
+                );
+                expect(root.querySelector('h1').textContent).toBe('Override slot content');
+            });
+
+            it('should render component named slot', () => {
                 const Component = () =>
                     html`
                         <h1><slot name="test-slot" /></h1>
