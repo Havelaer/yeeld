@@ -449,7 +449,7 @@ describe('render', () => {
                 expect(div.textContent).toContain('override slot2');
             });
 
-            xit('should render slots in nested components', () => {
+            it('should render slots in nested components', () => {
                 const Component = () =>
                     html`
                         <div class="comp">
@@ -495,7 +495,7 @@ describe('render', () => {
                 expect(div.textContent).toContain('override default slot');
             });
 
-            xit('should render dynamicly named slots', () => {
+            it('should render dynamicly named slots', () => {
                 const Component = () => html`
                     <div class="comp">
                         <slot name="test-slot">default slot placeholder</slot>

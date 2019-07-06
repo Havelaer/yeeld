@@ -54,8 +54,6 @@ type AttrsDescriptor = (string | Record<string, string>)[];
 
 const valueRegex = /\$v(\d)\$/;
 const componentRegex = /\$c(\d)\$/;
-const slotNameRegex = /^([A-Za-z0-9\_\-]+)$/;
-const slotRegex = /\$s:([A-Za-z0-9\_\-]+)\$/;
 
 /* registries */
 
@@ -91,12 +89,6 @@ function getTemplateNodeType(node): TemplateNodeType {
     if (componentRegistry.has(node.nodeName)) return TemplateNodeType.COMPONENT;
     else if (node.nodeName === 'SLOT') return TemplateNodeType.SLOT;
     else return TemplateNodeType.ELEMENT;
-}
-
-function assertValidSlotName(slotName: string) {
-    if (valueRegex.test(slotName))
-        throw new Error('Slot name can`t be variable');
-    if (!slotNameRegex.test(slotName)) throw new Error('Invalid slot name');
 }
 
 function getValueIndex(str: string): number {
@@ -194,11 +186,8 @@ class ComponentTemplate {
 
             switch (getTemplateNodeType(node)) {
                 case TemplateNodeType.COMPONENT:
-                    postProcess = this.processComponent(node);
-                    break;
-
                 case TemplateNodeType.SLOT:
-                    postProcess = this.processSlot(node);
+                    postProcess = this.processComponent(node);
                     break;
 
                 case TemplateNodeType.ELEMENT:
@@ -221,20 +210,6 @@ class ComponentTemplate {
         this.subComponents.push(
             new ComponentTemplate(fragment, node.nodeName, attrsDescriptor),
         );
-        return () => node.parentNode.removeChild(node);
-    }
-
-    processSlot(node: Element) {
-        const name = node.getAttribute('name') || 'default';
-        /* debug */ console.log('name', name);
-        assertValidSlotName(name);
-        const refNode = document.createComment(`$s:${name}$`);
-        const fragment = document.createDocumentFragment();
-        Array.from(node.childNodes).forEach(node => fragment.appendChild(node));
-        if (this.slotPlaceholders[name])
-            throw new Error(`Slot ${name} allready exists`);
-        this.slotPlaceholders[name] = fragment;
-        node.parentNode.insertBefore(refNode, node);
         return () => node.parentNode.removeChild(node);
     }
 
@@ -354,9 +329,6 @@ class TemplateInstance {
         node: Element,
         nodeIndex: number,
     ) {
-        /* debug */ console.log('nodeIndex', nodeIndex);
-        /* debug */ console.log('component', component);
-        /* debug */ console.log('node.nodeName', node.nodeName);
         const attrsDescriptor = component.attrsDescriptors[nodeIndex];
         attrsDescriptor.forEach((attr, index) => {
             const valueIndex = getAttrValueIndex(attr);
@@ -404,19 +376,6 @@ class TemplateInstance {
                 childNodes: toChildNodes(this.createBindings(subComponent)),
             });
             return;
-        }
-
-        // Slot
-        const slotMatch = node.nodeValue.match(slotRegex);
-        if (slotMatch && slotMatch[1]) {
-            const slotName = slotMatch[1];
-            const slotContent =
-                // component.fragment ||
-                component.slotPlaceholders[slotName];
-
-            if (slotContent) {
-                node.parentNode.insertBefore(slotContent, node);
-            }
         }
     }
 
@@ -503,12 +462,29 @@ class SetValuesCycle {
             const attrs =
                 this.nodesMap.get(partial.node) ||
                 partial.component.propsDescriptor.concat();
-            /* debug */ console.log('attrs', attrs);
             const props = Object.assign({}, ...attrs);
-            const component = componentRegistry.get(partial.component.name);
-            const componentResult = component(props);
-            componentResult.attachChildNodes(partial.childNodes);
-            mountNodeValue(componentResult, partial.node);
+            if (partial.component.name === 'SLOT') {
+                const target = props.name || 'default';
+                /* debug */ console.log('target', target);
+                /* debug */ console.log('props', props);
+                /* debug */ console.log('partial.childNodes', partial.childNodes.map(node => node.textContent));
+                /* debug */ console.log('result', );
+                const fragment = document.createDocumentFragment();
+                const childNodes = this.instance.result.childNodes.filter((node: Element) => {
+                    const slotTarget = node.getAttribute && node.getAttribute('slot') || 'default';
+                    /* debug */ console.log('node', node.outerHTML);
+                    /* debug */ console.log('slotTarget', slotTarget);
+                    return slotTarget === target;
+                })
+                const toAppend = childNodes.length > 0 ? childNodes : partial.childNodes;
+                toAppend.forEach(node => fragment.appendChild(node));
+                partial.node.parentElement.insertBefore(fragment, partial.node);
+            } else {
+                const component = componentRegistry.get(partial.component.name);
+                const componentResult = component(props);
+                componentResult.attachChildNodes(partial.childNodes);
+                mountNodeValue(componentResult, partial.node);
+            }
         });
 
         delete this.prevCycle;
@@ -627,7 +603,6 @@ class NodeFragment {
         const curr = this.bindings;
         const next = [];
         const fragment = document.createDocumentFragment();
-        // let lastNode: Node = refNode;
 
         // Update existing bindings
         values.slice(0, curr.length).forEach((value, index) => {
@@ -636,8 +611,6 @@ class NodeFragment {
             if (binding.isSame(value)) {
                 binding.setValue(value);
                 next.push(binding);
-                // lastNode =
-                //     binding.mountedNodeRefs[binding.mountedNodeRefs.length - 1];
             } else {
                 const newBinding = createNodeBinding(value, index);
                 const markNode = binding.mountedNodeRefs[0];
@@ -647,10 +620,6 @@ class NodeFragment {
                     parentNode.removeChild(node),
                 );
                 next.push(newBinding);
-                // lastNode =
-                //     newBinding.mountedNodeRefs[
-                //         newBinding.mountedNodeRefs.length - 1
-                //     ];
             }
         });
 
@@ -660,10 +629,7 @@ class NodeFragment {
             fragment.appendChild(binding.getNode());
             next.push(binding);
         });
-        refNode.parentNode.insertBefore(
-            fragment,
-            refNode /* lastNode.nextSibling */,
-        );
+        refNode.parentNode.insertBefore(fragment, refNode);
 
         // Remove old bindings
         const parentNode = refNode.parentNode;
