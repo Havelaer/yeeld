@@ -6,6 +6,8 @@ export type EventHandler = (event: Event) => void;
 
 export type TemplateAttrValue = string | number | boolean | EventHandler;
 
+export type TemplateAttrSpreadValue = Record<string, TemplateAttrValue>;
+
 export type TemplateNodeValue =
     | string
     | number
@@ -25,6 +27,12 @@ export type TemplateValue = TemplateAttrValue | TemplateNodeValue;
 
 export type TemplateCache = Map<TemplateStringsArray, Template>;
 
+export enum TemplateNodeType {
+    SLOT,
+    COMPONENT,
+    ELEMENT,
+}
+
 export enum ValueType {
     ATTR,
     NODE,
@@ -40,11 +48,14 @@ export enum AttrValueType {
     FUNCTION,
 }
 
+type AttrsDescriptor = (string | Record<string, string>)[];
+
 /* regex */
 
 const valueRegex = /\$v(\d)\$/;
 const componentRegex = /\$c(\d)\$/;
-const slotRegex = /\$s:([A-Za-z0-9]+)\$/;
+const slotNameRegex = /^([A-Za-z0-9\_\-]+)$/;
+const slotRegex = /\$s:([A-Za-z0-9\_\-]+)\$/;
 
 /* registries */
 
@@ -76,14 +87,174 @@ function getNodeValueType(value): NodeValueType {
     throw new Error(`Cant render type as NodeValue`);
 }
 
+function getTemplateNodeType(node): TemplateNodeType {
+    if (componentRegistry.has(node.nodeName)) return TemplateNodeType.COMPONENT;
+    else if (node.nodeName === 'SLOT') return TemplateNodeType.SLOT;
+    else return TemplateNodeType.ELEMENT;
+}
+
+function assertValidSlotName(slotName: string) {
+    if (valueRegex.test(slotName))
+        throw new Error('Slot name can`t be variable');
+    if (!slotNameRegex.test(slotName)) throw new Error('Invalid slot name');
+}
+
+function getValueIndex(str: string): number {
+    const match = str.match(valueRegex);
+    if (!match || !match[1]) return;
+    return parseInt(match[1], 10);
+}
+
+function getComponentIndex(str: string): number {
+    const match = str.match(componentRegex);
+    if (!match || !match[1]) return;
+    return parseInt(match[1], 10);
+}
+
+function getAttrValueIndex(attr: Record<string, string> | string): number {
+    const isSpread = typeof attr === 'string';
+    const valName = isSpread ? attr : attr[Object.keys(attr)[0]];
+    return getValueIndex(valName);
+}
+
+function toSpread(
+    descriptor: TemplateAttrSpreadValue | string,
+    value: TemplateAttrValue | TemplateAttrSpreadValue,
+): TemplateAttrSpreadValue {
+    return (typeof descriptor === 'string'
+        ? value
+        : { [Object.keys(descriptor)[0]]: value }) as TemplateAttrSpreadValue;
+}
+
+function toChildNodes(fragment: DocumentFragment): Node[] {
+    return Array.from(fragment.childNodes);
+}
+
+function noop() {}
+
+/*
+ * Transform attributes of node
+ * 1. Create descriptor of attributes:
+ *      eg: <tag attr1="foo" attr2=${val1} ${val2} />
+ *      ->  [{ attr1: 'foo' }, { attr2: '$v0$'}, '$v1$']
+ * 2. Remove value attributes (values and spreads) from node
+ */
+function transformAttrs(node: Element): AttrsDescriptor {
+    const descriptor = [];
+    const toRemove = [];
+
+    Array.prototype.forEach.call(node.attributes, (attr: Attr, i) => {
+        const match =
+            attr.name.match(valueRegex) || attr.value.match(valueRegex);
+        if (!match) return descriptor.push({ [attr.name]: attr.value });
+
+        const isSpread = match[0] === attr.name;
+        descriptor.push(isSpread ? attr.name : { [attr.name]: attr.value });
+
+        toRemove.push(attr);
+    });
+
+    toRemove.forEach(attr => node.attributes.removeNamedItem(attr.name));
+
+    return descriptor;
+}
+
+function debugFragment(fragment: any) {
+    const div = document.createElement('div');
+    div.appendChild(fragment.cloneNode(true));
+    return div.innerHTML;
+}
+
+class ComponentTemplate {
+    public attrsDescriptors: AttrsDescriptor[] = [];
+
+    public slotPlaceholders: Record<string, DocumentFragment> = {};
+
+    public subComponents: ComponentTemplate[] = [];
+
+    public htmlOriginal: string = debugFragment(this.fragment.cloneNode(true));
+    public htmlCurrent: string;
+
+    constructor(
+        public fragment: DocumentFragment,
+        public name?: string,
+        public propsDescriptor?: AttrsDescriptor,
+    ) {
+        this.process();
+        this.htmlCurrent = debugFragment(this.fragment);
+    }
+
+    process() {
+        const walker = document.createTreeWalker(this.fragment, 1, null, false);
+        let postProcess: Function = noop;
+
+        while (walker.nextNode()) {
+            postProcess();
+            const node = walker.currentNode as Element;
+
+            switch (getTemplateNodeType(node)) {
+                case TemplateNodeType.COMPONENT:
+                    postProcess = this.processComponent(node);
+                    break;
+
+                case TemplateNodeType.SLOT:
+                    postProcess = this.processSlot(node);
+                    break;
+
+                case TemplateNodeType.ELEMENT:
+                    postProcess = this.processElement(node);
+                    break;
+            }
+        }
+
+        postProcess();
+    }
+
+    processComponent(node: Element) {
+        const refNode = document.createComment(
+            `$c${this.subComponents.length}$`,
+        );
+        const attrsDescriptor = transformAttrs(node);
+        const fragment = document.createDocumentFragment(); // with <div slot="name"
+        Array.from(node.childNodes).forEach(node => fragment.appendChild(node));
+        node.parentNode.insertBefore(refNode, node);
+        this.subComponents.push(
+            new ComponentTemplate(fragment, node.nodeName, attrsDescriptor),
+        );
+        return () => node.parentNode.removeChild(node);
+    }
+
+    processSlot(node: Element) {
+        const name = node.getAttribute('name') || 'default';
+        /* debug */ console.log('name', name);
+        assertValidSlotName(name);
+        const refNode = document.createComment(`$s:${name}$`);
+        const fragment = document.createDocumentFragment();
+        Array.from(node.childNodes).forEach(node => fragment.appendChild(node));
+        if (this.slotPlaceholders[name])
+            throw new Error(`Slot ${name} allready exists`);
+        this.slotPlaceholders[name] = fragment;
+        node.parentNode.insertBefore(refNode, node);
+        return () => node.parentNode.removeChild(node);
+    }
+
+    processElement(node: Element) {
+        const attrsDescriptor = transformAttrs(node);
+        this.attrsDescriptors.push(attrsDescriptor);
+        return noop;
+    }
+}
+
 class Template {
     private template!: HTMLTemplateElement;
 
-    public components = [];
-
-    public slotPlaceholders = {};
+    public rootComponent: ComponentTemplate;
 
     constructor(private strings: TemplateStringsArray) {
+        this.process();
+    }
+
+    process() {
         const template = document.createElement('template');
         let state: ValueType = ValueType.NODE;
 
@@ -105,63 +276,7 @@ class Template {
             .join('');
 
         this.template = template;
-
-        const walker = document.createTreeWalker(
-            this.template.content,
-            1,
-            null,
-            false,
-        );
-
-        const nodeList: Element[] = [];
-        while (walker.nextNode()) {
-            nodeList.push(walker.currentNode as Element);
-        }
-
-        const components = [];
-        let index = 0;
-
-        nodeList.reverse().forEach(node => {
-            // slot
-            if (node.nodeName === 'SLOT') {
-                const name = node.getAttribute('name') || 'default';
-                const refNode = document.createComment(`$s:${name}$`);
-                node.parentNode.insertBefore(refNode, node);
-                const fragment = document.createDocumentFragment();
-                const children = Array.from(node.childNodes);
-
-                children.forEach(node => {
-                    fragment.appendChild(node);
-                });
-                this.slotPlaceholders[name] = fragment;
-                node.parentNode.removeChild(node);
-                return;
-            }
-
-            if (!componentRegistry.has(node.nodeName)) return;
-
-            // component
-            const refNode = document.createComment(`$c${index}$`);
-            node.parentNode.insertBefore(refNode, node);
-            const slotTargets = {};
-            const children = Array.from(node.childNodes);
-            children.forEach((child: Element) => {
-                const slotName =
-                    (child.getAttribute && child.getAttribute('slot')) ||
-                    'default';
-                if (!slotTargets[slotName])
-                    slotTargets[slotName] = document.createDocumentFragment();
-                slotTargets[slotName].appendChild(child);
-            });
-            node.parentNode.removeChild(node);
-            components.push({
-                slotTargets,
-                name: node.nodeName,
-            });
-            index++;
-        });
-
-        this.components = components;
+        this.rootComponent = new ComponentTemplate(this.template.content);
     }
 
     clone() {
@@ -174,7 +289,7 @@ export class TemplateResult {
 
     public template: Template;
 
-    public slots: any;
+    public childNodes: Node[];
 
     constructor(
         public strings: TemplateStringsArray,
@@ -191,102 +306,113 @@ export class TemplateResult {
         this.template = template;
     }
 
-    attachSlots(slots: any) {
-        this.slots = slots;
+    attachChildNodes(childNodes: Node[]) {
+        this.childNodes = childNodes;
     }
+}
+
+interface TemplateInstancePartial {
+    node: Comment;
+    component: ComponentTemplate;
+    childNodes: Node[];
 }
 
 class TemplateInstance {
     private prevCycle: SetValuesCycle | null = null;
 
-    private element: DocumentFragment = this.result.template.clone();
+    private element: DocumentFragment;
+
+    public partials: TemplateInstancePartial[] = [];
 
     private valueBindings = new Array(this.result.values.length).fill(null);
 
     constructor(public result: TemplateResult) {
-        this.createBindings(this.element);
+        this.element = this.createBindings(this.result.template.rootComponent);
     }
 
-    private createBindings(root: Element | DocumentFragment) {
+    private createBindings(component: ComponentTemplate) {
+        const root = component.fragment.cloneNode(true) as DocumentFragment;
         const walker = document.createTreeWalker(root, 129, null, false); // 129: ELEMENT + COMMENT
+        let elementIndex = 0;
         while (walker.nextNode()) {
             const current = walker.currentNode;
             const type = current.nodeType;
-            if (type === 1) this.bindAttrMarkers(current as Element);
-            else if (type === 8) this.bindNodeMarkers(current as Comment);
+            if (type === 1)
+                this.bindElementMarkers(
+                    component,
+                    current as Element,
+                    elementIndex++,
+                );
+            else if (type === 8)
+                this.bindCommentMarkers(component, current as Comment);
         }
         return root;
     }
 
-    private bindAttrMarkers(node: Element) {
-        const attrsTemplate = [];
-        const cleanUp = [];
-
-        Array.prototype.forEach.call(node.attributes, (attr: Attr, i) => {
-            const match =
-                attr.name.match(valueRegex) || attr.value.match(valueRegex);
-            if (!match) return attrsTemplate.push({ [attr.name]: attr.value });
-
-            const isSpread = match[0] === attr.name;
-            const index = parseInt(match[1], 10);
-            attrsTemplate.push(
-                isSpread ? attr.name : { [attr.name]: attr.value },
-            );
-            this.valueBindings[index] = (cycle, value) => {
-                cycle.setAttrValue(
-                    node,
-                    attrsTemplate,
-                    i,
-                    isSpread ? value : { [attr.name]: value },
-                );
+    private bindElementMarkers(
+        component: ComponentTemplate,
+        node: Element,
+        nodeIndex: number,
+    ) {
+        /* debug */ console.log('nodeIndex', nodeIndex);
+        /* debug */ console.log('component', component);
+        /* debug */ console.log('node.nodeName', node.nodeName);
+        const attrsDescriptor = component.attrsDescriptors[nodeIndex];
+        attrsDescriptor.forEach((attr, index) => {
+            const valueIndex = getAttrValueIndex(attr);
+            this.valueBindings[valueIndex] = (cycle, value) => {
+                cycle.setElementAttrValue(node, attrsDescriptor, index, value);
             };
-
-            cleanUp.push(attr);
         });
-
-        cleanUp.forEach(attr => node.attributes.removeNamedItem(attr.name));
     }
 
-    private bindNodeMarkers(node: Comment) {
-        const valueMatch = node.nodeValue.match(valueRegex);
-        if (valueMatch && valueMatch[1]) {
-            const index = parseInt(valueMatch[1], 10);
-            this.valueBindings[index] = (cycle, value) => {
+    private bindCommentMarkers(component: ComponentTemplate, node: Comment) {
+        // TemplateValue
+        const valueIndex = getValueIndex(node.nodeValue);
+        if (valueIndex !== undefined) {
+            this.valueBindings[valueIndex] = (cycle, value) => {
                 if (value instanceof TemplateResult) {
-                    // TODO test extensively!
-                    value.attachSlots(this.result.slots);
+                    value.attachChildNodes(this.result.childNodes);
                 }
                 cycle.setNodeValue(node, value);
             };
             return;
         }
 
-        const componentMatch = node.nodeValue.match(componentRegex);
-        if (componentMatch && componentMatch[1]) {
-            const index = parseInt(componentMatch[1], 10);
-            const child = this.result.template.components[index];
-            if (!child) return;
-            const component = componentRegistry.get(child.name);
-            const componentResult = component({});
-            const slotTargets = Object.keys(child.slotTargets).reduce(
-                (slotTargets, target) => {
-                    slotTargets[target] = this.createBindings(
-                        child.slotTargets[target].cloneNode(true),
+        // Component
+        const componentIndex = getComponentIndex(node.nodeValue);
+        if (componentIndex !== undefined) {
+            const subComponent = component.subComponents[componentIndex];
+
+            // bind component props
+            const attrsDescriptor = subComponent.propsDescriptor;
+            attrsDescriptor.forEach((attr, index: number) => {
+                const valueIndex = getAttrValueIndex(attr);
+                this.valueBindings[valueIndex] = (cycle, value) => {
+                    cycle.setComponentPropValue(
+                        node,
+                        attrsDescriptor,
+                        index,
+                        value,
                     );
-                    return slotTargets;
-                },
-                {},
-            );
-            componentResult.attachSlots(slotTargets);
-            mountNodeValue(componentResult, node);
+                };
+            });
+
+            this.partials.push({
+                node,
+                component: subComponent,
+                childNodes: toChildNodes(this.createBindings(subComponent)),
+            });
+            return;
         }
 
+        // Slot
         const slotMatch = node.nodeValue.match(slotRegex);
         if (slotMatch && slotMatch[1]) {
             const slotName = slotMatch[1];
             const slotContent =
-                (this.result.slots && this.result.slots[slotName]) ||
-                this.result.template.slotPlaceholders[slotName];
+                // component.fragment ||
+                component.slotPlaceholders[slotName];
 
             if (slotContent) {
                 node.parentNode.insertBefore(slotContent, node);
@@ -295,7 +421,7 @@ class TemplateInstance {
     }
 
     setValues(values: TemplateValue[]) {
-        const cycle = new SetValuesCycle(this.prevCycle);
+        const cycle = new SetValuesCycle(this, this.prevCycle);
         this.valueBindings.forEach((binding, i) => binding(cycle, values[i]));
         cycle.commit();
         this.prevCycle = cycle;
@@ -307,39 +433,61 @@ class TemplateInstance {
 }
 
 class SetValuesCycle {
-    private map = new WeakMap<Element, Record<string, TemplateAttrValue>[]>();
+    private nodesMap = new WeakMap<Element | Comment, any>();
 
-    private attrNodes = [];
+    private elementNodes = [];
 
-    constructor(private prevCycle: SetValuesCycle) {}
+    private componentNodes = [];
+
+    constructor(
+        private instance: TemplateInstance,
+        private prevCycle: SetValuesCycle,
+    ) {}
 
     setNodeValue(node: Comment, value: TemplateNodeValue) {
         mountNodeValue(value, node);
     }
 
-    setAttrValue(
+    setElementAttrValue(
         node: Element,
-        attrsTemplate: any[],
-        index: number,
-        value: Record<string, TemplateAttrValue>,
+        attrsDescriptor: AttrsDescriptor,
+        attrsDescriptorIndex: number,
+        value: TemplateAttrValue | TemplateAttrSpreadValue,
     ) {
-        if (!this.map.has(node)) {
-            const attrs = attrsTemplate.concat();
-            this.attrNodes.push(node);
-            this.map.set(node, attrs);
+        if (!this.nodesMap.get(node)) {
+            this.nodesMap.set(node, attrsDescriptor.concat());
+            this.elementNodes.push(node);
         }
-        const attrs = this.map.get(node);
-        attrs.splice(index, 1, value);
+        const attrs = this.nodesMap.get(node);
+        const descriptor = attrsDescriptor[attrsDescriptorIndex];
+        const spread = toSpread(descriptor, value);
+        attrs.splice(attrsDescriptorIndex, 1, spread);
+    }
+
+    setComponentPropValue(
+        node: Comment,
+        attrsDescriptor: AttrsDescriptor,
+        attrsDescriptorIndex: number,
+        value: TemplateAttrValue & TemplateNodeValue,
+    ) {
+        if (!this.nodesMap.get(node)) {
+            this.nodesMap.set(node, attrsDescriptor.concat());
+            this.componentNodes.push(node);
+        }
+        const attrs = this.nodesMap.get(node);
+        const descriptor = attrsDescriptor[attrsDescriptorIndex];
+        const spread = toSpread(descriptor, value);
+        attrs.splice(attrsDescriptorIndex, 1, spread);
     }
 
     commit() {
-        this.attrNodes.forEach(node => {
-            const attrs = this.map.get(node);
+        this.elementNodes.forEach(node => {
+            const attrs = this.nodesMap.get(node);
             const attrsSquashed = Object.assign({}, ...attrs);
             const attrsSquashedPrev = this.prevCycle
-                ? this.prevCycle.map.get(node)
+                ? this.prevCycle.nodesMap.get(node)
                 : {};
-            this.map.set(node, attrsSquashed);
+            this.nodesMap.set(node, attrsSquashed);
 
             Object.keys(attrsSquashed).forEach(attr => {
                 updateAttrValue(
@@ -349,6 +497,18 @@ class SetValuesCycle {
                     attrsSquashedPrev[attr],
                 );
             });
+        });
+
+        this.instance.partials.forEach(partial => {
+            const attrs =
+                this.nodesMap.get(partial.node) ||
+                partial.component.propsDescriptor.concat();
+            /* debug */ console.log('attrs', attrs);
+            const props = Object.assign({}, ...attrs);
+            const component = componentRegistry.get(partial.component.name);
+            const componentResult = component(props);
+            componentResult.attachChildNodes(partial.childNodes);
+            mountNodeValue(componentResult, partial.node);
         });
 
         delete this.prevCycle;

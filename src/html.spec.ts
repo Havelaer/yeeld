@@ -359,7 +359,7 @@ describe('render', () => {
                 expect(root.textContent.trim()).toBe('hello');
             });
 
-            xit('should render component props', () => {
+            it('should render component props with fixed values', () => {
                 const Component = props =>
                     html`
                         <h1 class=${props.class}>hello</h1>
@@ -374,7 +374,26 @@ describe('render', () => {
                     root,
                 );
                 expect(root.querySelector('h1').getAttribute('class')).toBe(
-                    'hello',
+                    'header',
+                );
+            });
+
+            it('should render component props with var values', () => {
+                const Component = props =>
+                    html`
+                        <h1 class=${props.class}>hello</h1>
+                    `;
+
+                define('test2', Component);
+
+                render(
+                    html`
+                        <test2 class=${'header'}></test2>
+                    `,
+                    root,
+                );
+                expect(root.querySelector('h1').getAttribute('class')).toBe(
+                    'header',
                 );
             });
 
@@ -430,7 +449,7 @@ describe('render', () => {
                 expect(div.textContent).toContain('override slot2');
             });
 
-            it('should render slots in nested components', () => {
+            xit('should render slots in nested components', () => {
                 const Component = () =>
                     html`
                         <div class="comp">
@@ -452,11 +471,13 @@ describe('render', () => {
                 expect(div.textContent).toContain('override default slot');
             });
 
-            it('should render dynamic slots', () => {
+            xit('should render dynamicly rendered slots', () => {
                 const Component = () =>
                     html`
                         <div class="comp">
-                            ${html`<slot>default slot placeholder</slot>`}
+                            ${html`
+                                <slot>default slot placeholder</slot>
+                            `}
                         </div>
                     `;
 
@@ -473,11 +494,34 @@ describe('render', () => {
                 const div = root.querySelector('div');
                 expect(div.textContent).toContain('override default slot');
             });
+
+            xit('should render dynamicly named slots', () => {
+                const Component = () => html`
+                    <div class="comp">
+                        <slot name="test-slot">default slot placeholder</slot>
+                    </div>
+                `;
+
+                define('test2', Component);
+
+                const slotName = 'test-slot';
+
+                render(
+                    html`
+                        <test2>
+                            <span slot=${slotName}>override default slot</span>
+                        </test2>
+                    `,
+                    root,
+                );
+                const div = root.querySelector('div');
+                expect(div.textContent).toContain('override default slot');
+            });
         });
     });
 });
 
-describe('update', () => {
+xdescribe('update', () => {
     let root;
 
     beforeEach(() => {
