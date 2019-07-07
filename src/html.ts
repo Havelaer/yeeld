@@ -164,20 +164,20 @@ class ComponentTemplate {
 
     public subComponents: ComponentTemplate[] = [];
 
-    public htmlOriginal: string = debugFragment(this.fragment.cloneNode(true));
+    public htmlOriginal: string = debugFragment(this.content.cloneNode(true));
     public htmlCurrent: string;
 
     constructor(
-        public fragment: DocumentFragment,
+        public content: DocumentFragment,
         public name?: string,
         public propsDescriptor?: AttrsDescriptor,
     ) {
         this.process();
-        this.htmlCurrent = debugFragment(this.fragment);
+        this.htmlCurrent = debugFragment(this.content);
     }
 
     process() {
-        const walker = document.createTreeWalker(this.fragment, 1, null, false);
+        const walker = document.createTreeWalker(this.content, 1, null, false);
         let postProcess: Function = noop;
 
         while (walker.nextNode()) {
@@ -306,7 +306,7 @@ class TemplateInstance {
     }
 
     private createBindings(component: ComponentTemplate) {
-        const root = component.fragment.cloneNode(true) as DocumentFragment;
+        const root = component.content.cloneNode(true) as DocumentFragment;
         const walker = document.createTreeWalker(root, 129, null, false); // 129: ELEMENT + COMMENT
         let elementIndex = 0;
         while (walker.nextNode()) {
@@ -458,27 +458,22 @@ class SetValuesCycle {
             });
         });
 
-        this.instance.partials.forEach(partial => {
+        // TODO should not have to reverse
+        this.instance.partials.concat().reverse().forEach(partial => {
             const attrs =
                 this.nodesMap.get(partial.node) ||
                 partial.component.propsDescriptor.concat();
             const props = Object.assign({}, ...attrs);
             if (partial.component.name === 'SLOT') {
                 const target = props.name || 'default';
-                /* debug */ console.log('target', target);
-                /* debug */ console.log('props', props);
-                /* debug */ console.log('partial.childNodes', partial.childNodes.map(node => node.textContent));
-                /* debug */ console.log('result', );
                 const fragment = document.createDocumentFragment();
                 const childNodes = this.instance.result.childNodes.filter((node: Element) => {
                     const slotTarget = node.getAttribute && node.getAttribute('slot') || 'default';
-                    /* debug */ console.log('node', node.outerHTML);
-                    /* debug */ console.log('slotTarget', slotTarget);
                     return slotTarget === target;
                 })
                 const toAppend = childNodes.length > 0 ? childNodes : partial.childNodes;
                 toAppend.forEach(node => fragment.appendChild(node));
-                partial.node.parentElement.insertBefore(fragment, partial.node);
+                partial.node.parentNode.insertBefore(fragment, partial.node);
             } else {
                 const component = componentRegistry.get(partial.component.name);
                 const componentResult = component(props);

@@ -459,19 +459,20 @@ describe('render', () => {
 
                 define('test2', Component);
 
+                const result = html`
+                    <test2>
+                        <test2>override default slot</test2>
+                    </test2>
+                `;
                 render(
-                    html`
-                        <test2>
-                            <test2>override default slot</test2>
-                        </test2>
-                    `,
+                    result,
                     root,
                 );
                 const div = root.querySelector('div');
                 expect(div.textContent).toContain('override default slot');
             });
 
-            xit('should render dynamicly rendered slots', () => {
+            it('should render dynamicly rendered slots', () => {
                 const Component = () =>
                     html`
                         <div class="comp">
@@ -495,7 +496,7 @@ describe('render', () => {
                 expect(div.textContent).toContain('override default slot');
             });
 
-            it('should render dynamicly named slots', () => {
+            it('should render dynamicly targeted slots', () => {
                 const Component = () => html`
                     <div class="comp">
                         <slot name="test-slot">default slot placeholder</slot>
@@ -504,12 +505,31 @@ describe('render', () => {
 
                 define('test2', Component);
 
-                const slotName = 'test-slot';
+                render(
+                    html`
+                        <test2>
+                            <span slot=${'test-slot'}>override default slot</span>
+                        </test2>
+                    `,
+                    root,
+                );
+                const div = root.querySelector('div');
+                expect(div.textContent).toContain('override default slot');
+            });
+
+            it('should render dynamicly named slots', () => {
+                const Component = () => html`
+                    <div class="comp">
+                        <slot name=${'test-slot'}>default slot placeholder</slot>
+                    </div>
+                `;
+
+                define('test2', Component);
 
                 render(
                     html`
                         <test2>
-                            <span slot=${slotName}>override default slot</span>
+                            <span slot="test-slot">override default slot</span>
                         </test2>
                     `,
                     root,
@@ -521,7 +541,7 @@ describe('render', () => {
     });
 });
 
-xdescribe('update', () => {
+describe('update', () => {
     let root;
 
     beforeEach(() => {
