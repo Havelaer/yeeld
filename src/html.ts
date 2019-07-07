@@ -459,28 +459,42 @@ class SetValuesCycle {
         });
 
         // TODO should not have to reverse
-        this.instance.partials.concat().reverse().forEach(partial => {
-            const attrs =
-                this.nodesMap.get(partial.node) ||
-                partial.component.propsDescriptor.concat();
-            const props = Object.assign({}, ...attrs);
-            if (partial.component.name === 'SLOT') {
-                const target = props.name || 'default';
-                const fragment = document.createDocumentFragment();
-                const childNodes = this.instance.result.childNodes.filter((node: Element) => {
-                    const slotTarget = node.getAttribute && node.getAttribute('slot') || 'default';
-                    return slotTarget === target;
-                })
-                const toAppend = childNodes.length > 0 ? childNodes : partial.childNodes;
-                toAppend.forEach(node => fragment.appendChild(node));
-                partial.node.parentNode.insertBefore(fragment, partial.node);
-            } else {
-                const component = componentRegistry.get(partial.component.name);
-                const componentResult = component(props);
-                componentResult.attachChildNodes(partial.childNodes);
-                mountNodeValue(componentResult, partial.node);
-            }
-        });
+        this.instance.partials
+            .concat()
+            .reverse()
+            .forEach(partial => {
+                const attrs =
+                    this.nodesMap.get(partial.node) ||
+                    partial.component.propsDescriptor.concat();
+                const props = Object.assign({}, ...attrs);
+                if (partial.component.name === 'SLOT') {
+                    const target = props.name || 'default';
+                    const fragment = document.createDocumentFragment();
+                    const childNodes = this.instance.result.childNodes.filter(
+                        (node: Element) => {
+                            const slotTarget =
+                                (node.getAttribute &&
+                                    node.getAttribute('slot')) ||
+                                'default';
+                            return slotTarget === target;
+                        },
+                    );
+                    const toAppend =
+                        childNodes.length > 0 ? childNodes : partial.childNodes;
+                    toAppend.forEach(node => fragment.appendChild(node));
+                    partial.node.parentNode.insertBefore(
+                        fragment,
+                        partial.node,
+                    );
+                } else {
+                    const component = componentRegistry.get(
+                        partial.component.name,
+                    );
+                    const componentResult = component(props);
+                    componentResult.attachChildNodes(partial.childNodes);
+                    mountNodeValue(componentResult, partial.node);
+                }
+            });
 
         delete this.prevCycle;
     }

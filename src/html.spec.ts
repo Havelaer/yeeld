@@ -226,7 +226,7 @@ describe('render', () => {
                         ${val2}
                         attr3="bar"
                         attr4=${val3}
-                    />
+                    ></div>
                 `;
                 render(
                     tmpl('111', { attr1: 'qaz', attr3: 'baz' }, '333'),
@@ -410,9 +410,7 @@ describe('render', () => {
                 define('test2', Component);
 
                 render(
-                    html`
-                        <test2></test2>
-                    `,
+                    html`<test2></test2>`,
                     root,
                 );
                 const div = root.querySelector('div');
@@ -425,8 +423,8 @@ describe('render', () => {
                 const Component = () =>
                     html`
                         <div class="test">
-                            <slot>default slot placeholder</slot>
-                            <slot name="slot1">slot1 placeholder</slot>
+                            <slot>default slot ${'placeholder'}</slot>
+                            <slot name="slot1">${'slot1'} placeholder</slot>
                             <slot name="slot2">slot2 placeholder</slot>
                         </div>
                     `;
@@ -436,7 +434,7 @@ describe('render', () => {
                 render(
                     html`
                         <test2>
-                            <div slot="slot1">override slot1</div>
+                            <div slot="slot1">${'override'} slot1</div>
                             <span slot="slot2">override slot2</span>
                             override default slot
                         </test2>
@@ -444,6 +442,9 @@ describe('render', () => {
                     root,
                 );
                 const div = root.querySelector('div');
+                expect(div.textContent).not.toContain('default slot placeholder');
+                expect(div.textContent).not.toContain('slot1 placeholder');
+                expect(div.textContent).not.toContain('slot2 placeholder');
                 expect(div.textContent).toContain('override default slot');
                 expect(div.textContent).toContain('override slot1');
                 expect(div.textContent).toContain('override slot2');
@@ -529,13 +530,49 @@ describe('render', () => {
                 render(
                     html`
                         <test2>
-                            <span slot="test-slot">override default slot</span>
+                            <span slot="test-slot">override default slot1</span>
+                        </test2>
+                        <test2>
+                            <span slot="test-slot">override default slot2</span>
                         </test2>
                     `,
                     root,
                 );
-                const div = root.querySelector('div');
-                expect(div.textContent).toContain('override default slot');
+                expect(root.textContent).not.toContain('default slot placeholder');
+                expect(root.textContent).toContain('override default slot1');
+                expect(root.textContent).toContain('override default slot2');
+            });
+
+            it('should render in corrent slots', () => {
+                const wrapper1 = () => html`
+                    <div class="wrapper1">
+                        <slot>default slot placeholder wrapper1</slot>
+                    </div>
+                `;
+
+                define('wrapper1', wrapper1);
+
+                const wrapper2 = () => html`
+                    <div class="wrapper2">
+                        <slot>default slot placeholder wrapper2</slot>
+                        <wrapper1></wrapper1>
+                    </div>
+                `;
+
+                define('wrapper2', wrapper2);
+
+                render(
+                    html`
+                        <wrapper2>
+                            <span>override default slot</span>
+                        </wrapper2>
+                    `,
+                    root,
+                );
+                expect(root.querySelector('.wrapper1')).toBeDefined();
+                expect(root.querySelector('.wrapper2')).toBeDefined();
+                expect(root.textContent).toContain('override default slot');
+                expect(root.textContent).toContain('default slot placeholder wrapper1');
             });
         });
     });
